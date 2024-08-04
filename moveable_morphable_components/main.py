@@ -44,13 +44,10 @@ class Domain2D:
         self,
         dimensions: tuple[float, float],
         num_elements: tuple[int, int],
-        ν: float,
     ) -> None:
         self.dimensions: NDArray = np.array(dimensions, dtype=np.float32)
         self.num_elements: NDArray = np.array(num_elements, dtype=np.int32)
         self.num_nodes: NDArray = self.num_elements + 1
-
-        self.ν: float = ν
 
         self.num_dofs: int = 2 * np.prod(self.num_nodes)
 
@@ -168,15 +165,50 @@ def make_stiffness_matrix(
     Returns:
         NDArray - The stiffness matrix for a single element
     """
+    # TODO: Mostly based off the original 218 line MMC-2D code.
+    # I would prefer to use the shape functions and domain to generate the matrix.
+    # High likelihood of errors in this function.
+
     a, b = element_size
-    k_1 = -1 / (6 * a * b) * (ν * (1 - a**2) - 2 * b**2)
-    # TODO: the paper seems to hardcode the matrix.
-    # That's fine as it's based off the shape functions. Could be useful to swap that in future.
-    # They do it in a really weird way though.
-    # Note, they store the lower triangle of the matrix in a 1D array.
-    raise NotImplementedError
+    k_1_1: float = -1 / (6 * a * b) * (a**2 * (ν - 1) - 2 * b**2)
+    k_1_2: float = (ν + 1) / 8
+    k_1_3: float = -1 / (12 * a * b) * (a**2 * (ν - 1) + 4 * b**2)
+    k_1_4: float = (3 * ν - 1) / 8
+    k_1_5: float = 1 / (12 * a * b) * (a**2 * (ν - 1) - 2 * b**2)
+    k_1_6: float = -k_1_2
+    k_1_7: float = 1 / (6 * a * b) * (a**2 * (ν - 1) + b**2)
+    k_1_8: float = -k_1_4
+    k_2_1: float = -1 / (6 * a * b) * (b**2 * (ν - 1) - 2 * a**2)
+    k_2_2: float = k_1_2
+    k_2_3: float = -1 / (12 * a * b) * (b**2 * (ν - 1) + 4 * a**2)
+    k_2_4: float = k_1_4
+    k_2_5: float = 1 / (12 * a * b) * (b**2 * (ν - 1) - 2 * a**2)
+    k_2_6: float = -k_1_2
+    k_2_7: float = 1 / (6 * a * b) * (b**2 * (ν - 1) + a**2)
+    k_2_8: float = -k_1_4
+
+    K_e_triu: NDArray = (
+        E
+        * h
+        / (1 - ν**2)
+        * np.array(
+            [
+                [k_1_1, k_1_2, k_1_3, k_1_4, k_1_5, k_1_6, k_1_7, k_1_8],
+                [0.0, k_2_1, k_2_8, k_2_7, k_2_6, k_2_5, k_2_4, k_2_3],
+                [0.0, 0.0, k_1_1, k_1_6, k_1_7, k_1_4, k_1_5, k_1_2],
+                [0.0, 0.0, 0.0, k_2_1, k_2_8, k_2_3, k_2_2, k_2_5],
+                [0.0, 0.0, 0.0, 0.0, k_1_1, k_1_2, k_1_3, k_1_4],
+                [0.0, 0.0, 0.0, 0.0, 0.0, k_2_1, k_2_8, k_2_7],
+                [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, k_1_1, k_1_6],
+                [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, k_2_1],
+            ]
+        )
+    )
+
+    K_e: NDArray = K_e_triu + K_e_triu.T - np.diag(np.diag(K_e))
+    return K_e
 
 
 if __name__ == "__main__":
-    domain = Domain2D(dimensions=(1.0, 1.0), num_elements=(10, 10), ν=0.3)
+    domain = Domain2D(dimensions=(1.0, 1.0), num_elements=(10, 10))
     main()
