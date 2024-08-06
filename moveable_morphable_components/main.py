@@ -67,12 +67,49 @@ def main() -> None:
     domain: Domain2D = Domain2D(dimensions=(2.0, 1.0), num_elements=(80, 40))
     # define_objective() # TODO
     # define_constraints() # TODO
+    # Fix the LHS nodes
+    fixed_node_ids: NDArray = np.arange(domain.num_nodes[1])
+    fixed_dof_ids: NDArray = np.concatenate(
+        [2 * fixed_node_ids, 2 * fixed_node_ids + 1]
+    )
+
+    # loaded_node_coords: NDArray = np.array([2.0, 0.5], dtype=np.int32) # TODO Specify in world coordinates
+    # loaded_node_index = (
+    #     loaded_node_coords / domain.dimensions * domain.num_nodes - 1
+    # ).astype(int)
+    loaded_node_index: NDArray = np.array([80, 20], dtype=np.int32)
+
+    loaded_node_ids: int = np.ravel_multi_index(loaded_node_index, domain.num_nodes)
+
     component_list: list[Component] = initialise_components(n_x=4, n_y=2, domain=domain)
 
     for i in range(MAX_ITERATIONS):
         φ: NDArray = calculate_φ(component_list, domain.node_coordinates)
         components.plot_φ(φ, domain.num_nodes)  # TODO for debug
-        finite_element()
+
+        # finite_element()
+        node_densities: NDArray = heaviside(φ, transition_width=ε, minimum_value=α)
+        node_densities = node_densities.reshape(domain.num_nodes)
+
+        element_densities: NDArray = np.mean(
+            [
+                node_densities[:-1, :-1],
+                node_densities[1:, :-1],
+                node_densities[:-1, 1:],
+                node_densities[1:, 1:],
+            ],
+            axis=0,
+        )
+
+        U: NDArray = np.zeros(domain.num_dofs)
+        K_e: NDArray = make_stiffness_matrix(E, ν, domain.element_size, t)
+        K = (
+            np.expand_dims(K_e.ravel(), 1).repeat(np.prod(domain.num_elements), axis=1)
+            * element_densities.ravel()
+        )
+
+        # U(free_dofs) = K(free_dofs, free_dofs) \ F(free_dofs)
+
         sensitivity_analysis()
         update_design_variables()
 
