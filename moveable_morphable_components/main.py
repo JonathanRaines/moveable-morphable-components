@@ -64,7 +64,7 @@ class Domain2D:
 
 
 def main() -> None:
-    domain: Domain2D = Domain2D(dimensions=(2.0, 1.0), num_elements=(20, 10))
+    domain: Domain2D = Domain2D(dimensions=(2.0, 1.0), num_elements=(80, 40))
     # define_objective() # TODO
     # define_constraints() # TODO
     component_list: list[Component] = initialise_components(n_x=4, n_y=2, domain=domain)
@@ -88,8 +88,19 @@ def define_constraints() -> None:
     raise NotImplementedError
 
 
-def initialise_components(n_x, n_y, domain) -> list[Component]:
-    region_size = domain.dimensions / (n_x, n_y)
+def initialise_components(n_x, n_y, domain: Domain2D) -> list[Component]:
+    """Initialises a grid of crossed Uniform Beams in the domain
+
+    Parameters:
+        n_x: int - The number of component pairs (crosses) in the x direction
+        n_y: int - The number of component pairs (crosses) in the y direction
+        domain: Domain2D - The domain in which the components are placed
+
+    Returns:
+        list[Component] - The list of components
+    """
+
+    region_size: NDArray = domain.dimensions / (n_x, n_y)
     x_coords: NDArray = np.linspace(
         region_size[0] / 2, domain.dimensions[0] - region_size[0] / 2, n_x
     )
@@ -115,12 +126,23 @@ def initialise_components(n_x, n_y, domain) -> list[Component]:
     return component_list
 
 
-def calculate_φ(component_list: list[Component], coordinates) -> NDArray:
+def calculate_φ(
+    component_list: list[Component], coordinates, ks_aggregation_power: int = 100
+) -> NDArray:
     """Calculates the level set function φ"""
     # TODO: domain returns coordinate generator. When/if to convert to NDArray?
     coords = np.array(list(coordinates))
-    φs = [component(coords) for component in component_list]
-    φ: NDArray = np.max(φs, axis=0)
+    φs = np.array([component(coords) for component in component_list])
+    ## Simple max aggregation
+    # φ: NDArray = np.max(φs, axis=0)
+
+    # Kolmogorov-Smirnov (KS) aggregation as per the original MMC-2D code
+    temp: NDArray = np.exp(φs * ks_aggregation_power)
+    φ: NDArray = np.maximum(
+        np.full(temp.shape[1], -1e3),
+        np.log(np.sum(temp, axis=0)) / ks_aggregation_power,
+    )
+
     return φ
 
 
