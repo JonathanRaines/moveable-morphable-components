@@ -55,8 +55,6 @@ class Domain2D:
 
         self.element_size: NDArray = dimensions / self.num_elements
 
-        # self.stiffness_matrix = make_stiffness_matrix(E, ν, self.element_size, h=1)
-
     @property
     def node_coordinates(self) -> Generator[tuple[float, float], None, None]:
         return itertools.product(
@@ -67,12 +65,13 @@ class Domain2D:
 
 def main() -> None:
     domain: Domain2D = Domain2D(dimensions=(2.0, 1.0), num_elements=(20, 10))
-    # define_objective()
-    # define_constraints()
+    # define_objective() # TODO
+    # define_constraints() # TODO
     component_list: list[Component] = initialise_components(n_x=4, n_y=2, domain=domain)
 
     for i in range(MAX_ITERATIONS):
-        calculate_φ(component_list)
+        φ: NDArray = calculate_φ(component_list, domain.node_coordinates)
+        components.plot_φ(φ, domain.num_nodes)  # TODO for debug
         finite_element()
         sensitivity_analysis()
         update_design_variables()
@@ -116,9 +115,13 @@ def initialise_components(n_x, n_y, domain) -> list[Component]:
     return component_list
 
 
-def calculate_φ() -> None:
+def calculate_φ(component_list: list[Component], coordinates) -> NDArray:
     """Calculates the level set function φ"""
-    raise NotImplementedError
+    # TODO: domain returns coordinate generator. When/if to convert to NDArray?
+    coords = np.array(list(coordinates))
+    φs = [component(coords) for component in component_list]
+    φ: NDArray = np.max(φs, axis=0)
+    return φ
 
 
 def finite_element() -> None:

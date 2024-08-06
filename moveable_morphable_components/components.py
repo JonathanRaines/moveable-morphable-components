@@ -1,11 +1,10 @@
 from dataclasses import dataclass
 import itertools
+from typing import Generator
 
 import numpy as np
 from numpy.typing import NDArray
 import plotly.express as px
-
-from main import heaviside
 
 
 @dataclass(frozen=True)
@@ -63,6 +62,8 @@ class UniformBeam(Component):
     def __call__(self, points: tuple | NDArray) -> NDArray:
         if isinstance(points, tuple):
             points = np.array(points).reshape(1, 2)
+        if isinstance(points, itertools.product):
+            points = np.array(list(points))
 
         x: NDArray = points[:, 0]
         y: NDArray = points[:, 1]
@@ -102,26 +103,31 @@ def plot_φ(φ: NDArray, resolution: tuple[int]) -> None:
     # Must flip the array top to bottom as plotly has the origin at the top left
     # and MMC uses a bottom left origin
     px.imshow(
-        np.flipud(φ.reshape(resolution[0], resolution[1])), template="simple_white"
+        φ.reshape(resolution[0], resolution[1]).T,
+        template="simple_white",
+        origin="lower",
     ).show()
 
 
-def plot_boundary(φ: NDArray, resolution: tuple[int]) -> None:
-    plot_φ(heaviside(φ, minimum_value=0.5, transition_width=0.1), resolution)
+# def plot_boundary(φ: NDArray, resolution: tuple[int]) -> None:
+#     plot_φ(heaviside(φ, minimum_value=0.5, transition_width=0.1), resolution)
 
 
 if __name__ == "__main__":
-    c: Circle = Circle(r=0.5, center=Point2D(0, 0))
+    c: Circle = Circle(r=0.2, center=Point2D(1, 0))
     r: UniformBeam = UniformBeam(
-        center=Point2D(0.0, 0.0), angle=np.pi / 4, length=0.2, thickness=0.1
+        center=Point2D(0.25, 0.75), angle=np.pi / 4, length=0.2, thickness=0.1
     )
+    lower = 0
+    upper = 1
     resolution: int = 100
     coords: NDArray = np.array(
         list(
             itertools.product(
-                np.linspace(-1, 1, resolution), np.linspace(-1, 1, resolution)
+                np.linspace(lower, upper, resolution),
+                np.linspace(lower, upper, resolution),
             )
         )
     )
-    plot_φ(c(coords), (resolution, resolution))
-    plot_boundary(c(coords), (resolution, resolution))
+    plot_φ(r(coords), (resolution, resolution))
+    # plot_boundary(c(coords), (resolution, resolution))
