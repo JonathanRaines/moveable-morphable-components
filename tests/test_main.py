@@ -1,7 +1,12 @@
 import numpy as np
 from numpy.typing import NDArray
 
-from moveable_morphable_components.main import heaviside, Domain2D
+from moveable_morphable_components.main import (
+    heaviside,
+    Domain2D,
+    make_stiffness_matrix,
+)
+from shape_func_and_stiffness import derive_stiffness_matrix
 
 
 def test_heaviside():
@@ -16,7 +21,7 @@ def test_heaviside():
 
 
 def test_domain():
-    domain = Domain2D(dimensions=(1.0, 2.0), num_elements=(10, 10), ν=0.3)
+    domain = Domain2D(dimensions=(1.0, 2.0), num_elements=(10, 10))
 
     assert all(domain.dimensions == (1.0, 2.0))
     assert all(domain.num_elements == (10, 10))
@@ -27,3 +32,13 @@ def test_domain():
     assert len(coordinates) == 121
     assert coordinates[0] == (0.0, 0.0)
     assert coordinates[-1] == (1.0, 2.0)
+
+
+def test_make_stiffness_matrix():
+    """Confirms the hard-coded stiffness matrix is the same as the one derived using sympy."""
+    k_e_hardcoded = make_stiffness_matrix(E=1.0, ν=0.3, element_size=(1.0, 1.0), t=1.0)
+    k_e, t, E, ν, a, b = derive_stiffness_matrix()
+    k_e_numeric = np.array(k_e.subs({E: 1.0, ν: 0.3, a: 1.0, b: 1.0, t: 1.0})).astype(
+        np.float64
+    )
+    np.testing.assert_allclose(k_e_hardcoded, k_e_numeric)

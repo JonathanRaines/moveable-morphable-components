@@ -151,7 +151,7 @@ def heaviside(
 
 
 def make_stiffness_matrix(
-    E: float, ν: float, element_size: tuple[float, float], h: int
+    E: float, ν: float, element_size: tuple[float, float], t: float
 ) -> NDArray:
     """
     Create the stiffness matrix for a single element
@@ -160,7 +160,7 @@ def make_stiffness_matrix(
         E: float - Young's modulus
         ν: float - Poisson's ratio
         element_size: tuple[float, float] - The size of the element
-        h: int - The thickness of the element
+        h: float - The thickness of the element
 
     Returns:
         NDArray - The stiffness matrix for a single element
@@ -169,46 +169,52 @@ def make_stiffness_matrix(
     # I would prefer to use the shape functions and domain to generate the matrix.
     # High likelihood of errors in this function.
 
+    # My calculation of K_e matches that in the 218 line code.  k_1_1 here is equivalent to k1(1)
+    # It is the first row of the element stiffness matrix.
+    # I have adjusted indices for k2 from the 218 line code. There K_e is described as a 1D matrix
+    # so the k2 indices are in a strange order to allow for the process of turning those values into a
+    # symmetric 8 x 8 matrix. All values of k2 match my derivation, I have just changed their indices them for clarity.
+
+    # Note: the indices in the variable names are 1-indexed to match the 218 line code and mathematical matrix notation.
+    # They are never indexed on their names or used outside this function.
+
     a, b = element_size
     k_1_1: float = -1 / (6 * a * b) * (a**2 * (ν - 1) - 2 * b**2)
     k_1_2: float = (ν + 1) / 8
     k_1_3: float = -1 / (12 * a * b) * (a**2 * (ν - 1) + 4 * b**2)
     k_1_4: float = (3 * ν - 1) / 8
     k_1_5: float = 1 / (12 * a * b) * (a**2 * (ν - 1) - 2 * b**2)
-    k_1_6: float = -k_1_2
     k_1_7: float = 1 / (6 * a * b) * (a**2 * (ν - 1) + b**2)
-    k_1_8: float = -k_1_4
-    k_2_1: float = -1 / (6 * a * b) * (b**2 * (ν - 1) - 2 * a**2)
-    k_2_2: float = k_1_2
-    k_2_3: float = -1 / (12 * a * b) * (b**2 * (ν - 1) + 4 * a**2)
-    k_2_4: float = k_1_4
-    k_2_5: float = 1 / (12 * a * b) * (b**2 * (ν - 1) - 2 * a**2)
-    k_2_6: float = -k_1_2
-    k_2_7: float = 1 / (6 * a * b) * (b**2 * (ν - 1) + a**2)
-    k_2_8: float = -k_1_4
+    k_2_2: float = -1 / (6 * a * b) * (b**2 * (ν - 1) - 2 * a**2)
+    k_2_4: float = 1 / (6 * a * b) * (b**2 * (ν - 1) + a**2)
+    k_2_6: float = 1 / (12 * a * b) * (b**2 * (ν - 1) - 2 * a**2)
+    k_2_8: float = -1 / (12 * a * b) * (b**2 * (ν - 1) + 4 * a**2)
 
     K_e_triu: NDArray = (
         E
-        * h
+        * t
         / (1 - ν**2)
         * np.array(
             [
-                [k_1_1, k_1_2, k_1_3, k_1_4, k_1_5, k_1_6, k_1_7, k_1_8],
-                [0.0, k_2_1, k_2_8, k_2_7, k_2_6, k_2_5, k_2_4, k_2_3],
-                [0.0, 0.0, k_1_1, k_1_6, k_1_7, k_1_4, k_1_5, k_1_2],
-                [0.0, 0.0, 0.0, k_2_1, k_2_8, k_2_3, k_2_2, k_2_5],
+                [k_1_1, k_1_2, k_1_3, k_1_4, k_1_5, -k_1_2, k_1_7, -k_1_4],
+                [0.0, k_2_2, -k_1_4, k_2_4, -k_1_2, k_2_6, k_1_4, k_2_8],
+                [0.0, 0.0, k_1_1, -k_1_2, k_1_7, k_1_4, k_1_5, k_1_2],
+                [0.0, 0.0, 0.0, k_2_2, -k_1_4, k_2_8, k_1_2, k_2_6],
                 [0.0, 0.0, 0.0, 0.0, k_1_1, k_1_2, k_1_3, k_1_4],
-                [0.0, 0.0, 0.0, 0.0, 0.0, k_2_1, k_2_8, k_2_7],
-                [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, k_1_1, k_1_6],
-                [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, k_2_1],
+                [0.0, 0.0, 0.0, 0.0, 0.0, k_2_2, -k_1_4, k_2_4],
+                [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, k_1_1, -k_1_2],
+                [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, k_2_2],
             ]
         )
     )
 
-    K_e: NDArray = K_e_triu + K_e_triu.T - np.diag(np.diag(K_e))
+    K_e: NDArray = K_e_triu + K_e_triu.T - np.diag(np.diag(K_e_triu))
     return K_e
 
 
 if __name__ == "__main__":
     domain = Domain2D(dimensions=(1.0, 1.0), num_elements=(10, 10))
-    main()
+    K = make_stiffness_matrix(1, 0.2, (1, 1), 1)
+    np.set_printoptions(precision=3)
+    print(K)
+    # main()
