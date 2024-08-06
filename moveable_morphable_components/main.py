@@ -5,6 +5,8 @@ from typing import Generator
 import numpy as np  # Might be worth going to JAX for GPU acceleration
 from numpy.typing import NDArray
 
+import components
+
 E: float = 1.0  # Young's modulus
 α: float = 1e-9  # Young's modulus of void
 ε: float = 0.2  # Size of transition region for the smoothed Heaviside function
@@ -64,26 +66,19 @@ class Domain2D:
 
 
 def main() -> None:
-    define_design_space()
-    define_objective()
-    define_constraints()
-    components: list[Component] = initialise_components()
+    domain: Domain2D = Domain2D(dimensions=(2.0, 1.0), num_elements=(20, 10))
+    # define_objective()
+    # define_constraints()
+    component_list: list[Component] = initialise_components(n_x=4, n_y=2, domain=domain)
 
     for i in range(MAX_ITERATIONS):
-        calculate_φ(components)
+        calculate_φ(component_list)
         finite_element()
         sensitivity_analysis()
         update_design_variables()
 
         if is_converged():
             break
-
-
-def define_design_space(
-    width,
-    height,
-) -> None:
-    raise NotImplementedError
 
 
 def define_objective() -> None:
@@ -94,8 +89,31 @@ def define_constraints() -> None:
     raise NotImplementedError
 
 
-def initialise_components() -> None:
-    raise NotImplementedError
+def initialise_components(n_x, n_y, domain) -> list[Component]:
+    region_size = domain.dimensions / (n_x, n_y)
+    x_coords: NDArray = np.linspace(
+        region_size[0] / 2, domain.dimensions[0] - region_size[0] / 2, n_x
+    )
+    y_coords: NDArray = np.linspace(
+        region_size[1] / 2, domain.dimensions[1] - region_size[1] / 2, n_y
+    )
+
+    angle: float = np.atan2(region_size[1], region_size[0])
+    length: float = np.linalg.norm(region_size)
+
+    component_list: list[Component] = []
+    for x, y in itertools.product(x_coords, y_coords):
+        for sign in [-1, 1]:
+            component_list.append(
+                components.UniformBeam(
+                    center=components.Point2D(x, y),
+                    angle=sign * angle,
+                    length=length,
+                    thickness=length / 10,
+                )
+            )
+
+    return component_list
 
 
 def calculate_φ() -> None:
@@ -213,8 +231,4 @@ def make_stiffness_matrix(
 
 
 if __name__ == "__main__":
-    domain = Domain2D(dimensions=(1.0, 1.0), num_elements=(10, 10))
-    K = make_stiffness_matrix(1, 0.2, (1, 1), 1)
-    np.set_printoptions(precision=3)
-    print(K)
-    # main()
+    main()
