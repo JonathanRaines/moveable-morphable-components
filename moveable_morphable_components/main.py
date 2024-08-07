@@ -9,6 +9,7 @@ import plotly.express as px
 from scipy.sparse.linalg import spsolve
 
 import components
+import method_moving_asymptotes as mma
 
 E: float = 1.0  # Young's modulus
 α: float = 1e-9  # Young's modulus of void
@@ -58,6 +59,7 @@ class Domain2D:
 
         self.element_size: NDArray = dimensions / self.num_elements
 
+    # TODO currently (y, x) as the way product generates it.
     @property
     def node_coordinates(self) -> Generator[tuple[float, float], None, None]:
         return itertools.product(
@@ -85,7 +87,7 @@ def main() -> None:
 
     # Load the beam on the RHS half way up
     loaded_node_index: NDArray = np.array(
-        [domain.num_nodes[0], domain.num_nodes[1] // 2], dtype=np.int32
+        [domain.num_nodes[0] - 1, domain.num_nodes[1] // 2], dtype=np.int32
     )
     loaded_node_ids: int = np.ravel_multi_index(
         loaded_node_index, domain.num_nodes, order="F"
@@ -105,7 +107,7 @@ def main() -> None:
 
     for i in range(MAX_ITERATIONS):
         φ: NDArray = calculate_φ(component_list, domain.node_coordinates)
-        # components.plot_φ(φ, domain.num_nodes)  # TODO for debug
+        components.plot_φ(φ, domain.num_nodes)  # TODO for debug
 
         # finite_element()
         node_densities: NDArray = heaviside(φ, transition_width=ε, minimum_value=α)
@@ -166,9 +168,9 @@ def main() -> None:
         for element in element_ids:
             global_dofs = dof_indices[8 * element : 8 * element + 8]
             for i, j in itertools.product(range(8), range(8)):
-                K[global_dofs[i], global_dofs[j]] += K_e[
-                    i, j
-                ]  # * element_densities[element]
+                K[global_dofs[i], global_dofs[j]] += (
+                    K_e[i, j] * element_densities[element]
+                )
         K_free = K[free_dofs, :][:, free_dofs]
 
         U[free_dofs] = spsolve(K_free, F[free_dofs])
@@ -218,14 +220,14 @@ def initialise_components(n_x, n_y, domain: Domain2D) -> list[Component]:
     length: float = np.linalg.norm(region_size)
 
     component_list: list[Component] = []
-    for x, y in itertools.product(x_coords, y_coords):
+    for y, x in itertools.product(y_coords, x_coords):
         for sign in [-1, 1]:
             component_list.append(
                 components.UniformBeam(
                     center=components.Point2D(x, y),
                     angle=sign * angle,
                     length=length,
-                    thickness=length / 10,
+                    thickness=0.1,
                 )
             )
 
@@ -238,6 +240,9 @@ def calculate_φ(
     """Calculates the level set function φ"""
     # TODO: domain returns coordinate generator. When/if to convert to NDArray?
     coords = np.array(list(coordinates))
+    coords = np.fliplr(
+        coords
+    )  # TODO: currently (y, x) as the way product generates it.
     φs = np.array([component(coords) for component in component_list])
     ## Simple max aggregation
     # φ: NDArray = np.max(φs, axis=0)
