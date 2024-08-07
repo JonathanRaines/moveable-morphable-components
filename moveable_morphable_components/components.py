@@ -103,7 +103,7 @@ def plot_φ(φ: NDArray, resolution: tuple[int]) -> None:
     # Must flip the array top to bottom as plotly has the origin at the top left
     # and MMC uses a bottom left origin
     px.imshow(
-        φ.reshape(resolution[0], resolution[1]).T,
+        φ.reshape(resolution[0], resolution[1], order="F").T,
         template="simple_white",
         origin="lower",
     ).show()

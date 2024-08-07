@@ -2,14 +2,17 @@ from dataclasses import dataclass
 import itertools
 from typing import Generator
 
+
 import numpy as np  # Might be worth going to JAX for GPU acceleration
 from numpy.typing import NDArray
+import plotly.express as px
+from scipy.sparse.linalg import spsolve
 
 import components
 
 E: float = 1.0  # Young's modulus
 α: float = 1e-9  # Young's modulus of void
-ε: float = 0.2  # Size of transition region for the smoothed Heaviside function
+ε: float = 0.3  # Size of transition region for the smoothed Heaviside function
 ν: float = 0.3  # Poisson's ratio
 t: float = 1.0  # Thickness
 
@@ -58,34 +61,51 @@ class Domain2D:
     @property
     def node_coordinates(self) -> Generator[tuple[float, float], None, None]:
         return itertools.product(
-            np.linspace(0, self.dimensions[0], self.num_nodes[0]),
             np.linspace(0, self.dimensions[1], self.num_nodes[1]),
+            np.linspace(0, self.dimensions[0], self.num_nodes[0]),
         )
 
 
 def main() -> None:
     domain: Domain2D = Domain2D(dimensions=(2.0, 1.0), num_elements=(80, 40))
+    # domain: Domain2D = Domain2D(dimensions=(1.0, 1.0), num_elements=(3, 2))
+    # domain: Domain2D = Domain2D(dimensions=(1.0, 1.0), num_elements=(1, 1))
+
     # define_objective() # TODO
-    # define_constraints() # TODO
-    # Fix the LHS nodes
-    fixed_node_ids: NDArray = np.arange(domain.num_nodes[1])
+
+    # Fix the left hand side in place
+    fixed_node_ids: NDArray = np.arange(
+        np.prod(domain.num_nodes), step=domain.num_nodes[0]
+    )
     fixed_dof_ids: NDArray = np.concatenate(
         [2 * fixed_node_ids, 2 * fixed_node_ids + 1]
     )
+    fixed_dofs = np.zeros(domain.num_dofs, dtype=bool)
+    fixed_dofs[[fixed_dof_ids]] = True
 
-    # loaded_node_coords: NDArray = np.array([2.0, 0.5], dtype=np.int32) # TODO Specify in world coordinates
-    # loaded_node_index = (
-    #     loaded_node_coords / domain.dimensions * domain.num_nodes - 1
-    # ).astype(int)
-    loaded_node_index: NDArray = np.array([80, 20], dtype=np.int32)
+    # Load the beam on the RHS half way up
+    loaded_node_index: NDArray = np.array(
+        [domain.num_nodes[0], domain.num_nodes[1] // 2], dtype=np.int32
+    )
+    loaded_node_ids: int = np.ravel_multi_index(
+        loaded_node_index, domain.num_nodes, order="F"
+    )
+    loaded_dof_ids = [2 * loaded_node_ids, 2 * loaded_node_ids + 1]
 
-    loaded_node_ids: int = np.ravel_multi_index(loaded_node_index, domain.num_nodes)
+    loaded_dofs = np.zeros(domain.num_dofs, dtype=bool)
+    loaded_dofs[[loaded_dof_ids]] = True
 
+    F = np.zeros(domain.num_dofs)
+    F[2 * loaded_node_ids + 1] = -1.0  # Force in negative y direction
+
+    # Generate the iniiial components
     component_list: list[Component] = initialise_components(n_x=4, n_y=2, domain=domain)
+
+    free_dofs = np.logical_not(fixed_dofs)
 
     for i in range(MAX_ITERATIONS):
         φ: NDArray = calculate_φ(component_list, domain.node_coordinates)
-        components.plot_φ(φ, domain.num_nodes)  # TODO for debug
+        # components.plot_φ(φ, domain.num_nodes)  # TODO for debug
 
         # finite_element()
         node_densities: NDArray = heaviside(φ, transition_width=ε, minimum_value=α)
@@ -99,16 +119,65 @@ def main() -> None:
                 node_densities[1:, 1:],
             ],
             axis=0,
-        )
+        ).flatten(order="F")
 
         U: NDArray = np.zeros(domain.num_dofs)
         K_e: NDArray = make_stiffness_matrix(E, ν, domain.element_size, t)
-        K = (
-            np.expand_dims(K_e.ravel(), 1).repeat(np.prod(domain.num_elements), axis=1)
-            * element_densities.ravel()
-        )
+        element_ids = np.arange(np.prod(domain.num_elements))
+        element_multi_index = np.array(
+            np.unravel_index(element_ids, domain.num_elements, order="F")
+        ).T
+        node_global_multi_index = np.array(
+            [
+                element_multi_index,
+                element_multi_index + [1, 0],
+                element_multi_index + [1, 1],
+                element_multi_index + [0, 1],
+            ]
+        ).reshape((-1, 2), order="F")
 
-        # U(free_dofs) = K(free_dofs, free_dofs) \ F(free_dofs)
+        # The global node ids for each element
+        # Start in top left, sweep along x direction, then down a row.
+        # Nodes are numbered starting in the bottom left corner and moving anti-clockwise
+        # 4 nodes per element. Adjacent elements share nodes.
+        """
+            8   9  10  11
+            *---*---*---*
+            | 3 | 4 | 5 |
+          4 *---*---*---* 7
+            | 0 | 1 | 2 |
+            *---*---*---*
+            0   1   2   3
+        """
+        node_global_indices = np.ravel_multi_index(
+            (node_global_multi_index[:, 0], node_global_multi_index[:, 1]),
+            domain.num_nodes,
+            order="F",
+        )
+        dof_indices = np.array(
+            [
+                2 * node_global_indices,
+                2 * node_global_indices + 1,
+            ]
+        ).flatten(order="F")
+
+        # TODO Seems to be a bug here. K is not being assembled correctly.
+        K = np.zeros((domain.num_dofs, domain.num_dofs))
+        for element in element_ids:
+            global_dofs = dof_indices[8 * element : 8 * element + 8]
+            for i, j in itertools.product(range(8), range(8)):
+                K[global_dofs[i], global_dofs[j]] += K_e[
+                    i, j
+                ]  # * element_densities[element]
+        K_free = K[free_dofs, :][:, free_dofs]
+
+        U[free_dofs] = spsolve(K_free, F[free_dofs])
+
+        # Visualise the result TODO debug
+        # X displacements
+        px.imshow(U[::2].reshape(domain.num_nodes, order="F").T, origin="lower").show()
+        # Y displacements
+        px.imshow(U[1::2].reshape(domain.num_nodes, order="F").T, origin="lower").show()
 
         sensitivity_analysis()
         update_design_variables()
