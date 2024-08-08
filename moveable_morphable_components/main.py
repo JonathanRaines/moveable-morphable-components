@@ -1,35 +1,25 @@
-from dataclasses import dataclass
 import itertools
 from typing import Generator
 
 
 import numpy as np  # Might be worth going to JAX for GPU acceleration
 from numpy.typing import NDArray
+
 import plotly.express as px
 from scipy.sparse.linalg import spsolve
+import tqdm
 
 import components
 import method_moving_asymptotes as mma
 
-E: float = 1.0  # Young's modulus
+E: float = 1  # 000.0  # Young's modulus
 α: float = 1e-9  # Young's modulus of void
 ε: float = 0.3  # Size of transition region for the smoothed Heaviside function
 ν: float = 0.3  # Poisson's ratio
 t: float = 1.0  # Thickness
 
 MAX_ITERATIONS: int = 100
-
-
-@dataclass
-class Component:
-    # Placehoder for now. Want to make this general.
-    # Class or function? Use the SDF library?
-    x: float
-    y: float
-    θ: float
-    t_1: float
-    t_2: float
-    t_3: float
+VOLUME_FRACTION: float = 0.4
 
 
 class Domain2D:
@@ -84,6 +74,7 @@ def main() -> None:
     )
     fixed_dofs = np.zeros(domain.num_dofs, dtype=bool)
     fixed_dofs[[fixed_dof_ids]] = True
+    free_dofs = np.logical_not(fixed_dofs)
 
     # Load the beam on the RHS half way up
     loaded_node_index: NDArray = np.array(
@@ -101,16 +92,55 @@ def main() -> None:
     F[2 * loaded_node_ids + 1] = -1.0  # Force in negative y direction
 
     # Generate the iniiial components
-    component_list: list[Component] = initialise_components(n_x=4, n_y=2, domain=domain)
+    component_list: list[components.Component] = initialise_components(
+        n_x=2,  # 4,
+        n_y=1,  # 2,
+        domain=domain,
+    )
 
-    free_dofs = np.logical_not(fixed_dofs)
+    # inialise the starting values for mma
+    xmin = np.vstack((0, 0, -np.pi / 2, 0, 0))
+    xmin = np.matlib.repmat(xmin, len(component_list), 1)
+    xmax = np.vstack(
+        (
+            domain.dimensions[0],
+            domain.dimensions[1],
+            np.pi / 2,
+            np.linalg.norm(domain.dimensions) / 2,
+            np.min(domain.dimensions) / 2,
+        )
+    )
+    xmax = np.matlib.repmat(xmax, len(component_list), 1)
+    m = 1
+    low = xmin
+    upp = xmax
+    a0 = 1
+    a = np.zeros((m, 1))
+    c = np.full((m, 1), 1000)
+    d = np.zeros((m, 1))
 
-    for i in range(MAX_ITERATIONS):
-        φ: NDArray = calculate_φ(component_list, domain.node_coordinates)
-        components.plot_φ(φ, domain.num_nodes)  # TODO for debug
+    for iteration in tqdm.trange(MAX_ITERATIONS):
+        φ, dφ_dφs = calculate_φ(component_list, domain.node_coordinates)
+        # plot_values(φ, domain.num_nodes).show()
+        # plot_values(dφ_dφs[0], domain.num_nodes).show()
+        # H is Heaviside(φ)
+        H: NDArray = heaviside(φ, transition_width=ε, minimum_value=α)
+        # plot_values(H, domain.num_nodes).show()
+        # Calculate the derivative of H with respect to φ using the analytical form
+        dH_dφ: NDArray = 3 * (1 - α) / (4 * ε) * (1 - φ**2 / ε**2)
+        dH_dφ = np.where(abs(φ) > ε, 0, dH_dφ)
+        # plot_values(dH_dφ, domain.num_nodes).show()
+        coords = np.fliplr(np.array(list(domain.node_coordinates)))
+        # Calculate the derivative of φ with respect to the design variables
+        dφ_component_d_design_vars = np.concat(
+            [comp.φ_grad(coords[:, 0], coords[:, 1]) for comp in component_list]
+        )
+        dφ_d_design_vars = np.repeat(dφ_dφs, 5, axis=0) * dφ_component_d_design_vars
+        # for design_var in dφ_d_design_vars:
+        #     plot_values(design_var, domain.num_nodes).show()
 
         # finite_element()
-        node_densities: NDArray = heaviside(φ, transition_width=ε, minimum_value=α)
+        node_densities: NDArray = H.copy()
         node_densities = node_densities.reshape(domain.num_nodes)
 
         element_densities: NDArray = np.mean(
@@ -163,29 +193,138 @@ def main() -> None:
             ]
         ).flatten(order="F")
 
-        # TODO Seems to be a bug here. K is not being assembled correctly.
         K = np.zeros((domain.num_dofs, domain.num_dofs))
-        for element in element_ids:
-            global_dofs = dof_indices[8 * element : 8 * element + 8]
+
+        for element, element_dof_global_indices in enumerate(
+            dof_indices.reshape((-1, 8))
+        ):
             for i, j in itertools.product(range(8), range(8)):
-                K[global_dofs[i], global_dofs[j]] += (
+                K[element_dof_global_indices[i], element_dof_global_indices[j]] += (
                     K_e[i, j] * element_densities[element]
                 )
         K_free = K[free_dofs, :][:, free_dofs]
 
-        U[free_dofs] = spsolve(K_free, F[free_dofs])
+        U[free_dofs] = np.linalg.solve(K_free, F[free_dofs])
 
         # Visualise the result TODO debug
         # X displacements
-        px.imshow(U[::2].reshape(domain.num_nodes, order="F").T, origin="lower").show()
-        # Y displacements
-        px.imshow(U[1::2].reshape(domain.num_nodes, order="F").T, origin="lower").show()
+        # plot_values(U[::2], domain.num_nodes).show()
+        # # Y displacements
+        # plot_values(U[1::2], domain.num_nodes).show()
 
-        sensitivity_analysis()
-        update_design_variables()
+        # Calculate the Energy of the Elements
+        U_by_element = U[dof_indices.reshape((-1, 8))]
+        element_energy = np.sum(
+            (U_by_element @ K_e) * U_by_element,
+            axis=1,
+        ).reshape(domain.num_elements, order="F")
+        # plot_values(element_energy, domain.num_elements).show()
 
-        if is_converged():
-            break
+        node_energy = np.zeros(domain.num_nodes)
+        node_energy[:-1, :-1] += element_energy / 4
+        node_energy[1:, :-1] += element_energy / 4
+        node_energy[1:, 1:] += element_energy / 4
+        node_energy[:-1, 1:] += element_energy / 4
+        node_energy = node_energy.flatten(order="F")
+        # plot_values(node_energy, domain.num_nodes).show()
+
+        node_volumes = np.zeros(domain.num_nodes)
+        node_volumes[:-1, :-1] += 1 / 4
+        node_volumes[1:, :-1] += 1 / 4
+        node_volumes[1:, 1:] += 1 / 4
+        node_volumes[:-1, 1:] += 1 / 4
+        node_volumes = node_volumes.flatten(order="F")
+        # plot_values(node_volumes, domain.num_nodes).show()
+
+        # s_energy = np.expand_dims(energy, axis=1) @ np.ones((1, 4) / 4
+        # node_energy[node_global_indices] = sum(s_energy[node_global_indices]
+
+        comp = F.T @ U
+
+        # sensitivity_analysis()
+        design_variables = np.array(
+            [list(component.design_variables) for component in component_list]
+        ).flatten()
+        # Define the initial values for the design variables
+        initial_design_variables = np.expand_dims(
+            design_variables.flatten(order="F"), axis=1
+        )
+        design_variables_prev = initial_design_variables.copy()
+        design_variables_prev_2 = initial_design_variables.copy()
+
+        # components x design variables x nodes
+        d_objective_d_design_vars = np.nansum(
+            -node_energy * dH_dφ * dφ_d_design_vars, axis=1
+        )
+        # for d_obj_d_dv in d_objective_d_design_var:
+        #     plot_values(
+        #         d_obj_d_dv,
+        #         domain.num_nodes,
+        #     ).show()
+        d_volume_fraction_d_design_vars = np.nansum(
+            node_volumes * dH_dφ * dφ_d_design_vars,
+            axis=1,
+        )
+
+        f0val = comp
+        d_objective_d_design_vars = (-d_objective_d_design_vars) / np.max(
+            abs(d_objective_d_design_vars)
+        )
+        fval = (
+            np.sum(node_densities)
+            * np.prod(domain.element_size)
+            / np.prod(domain.dimensions)
+            - VOLUME_FRACTION
+        )
+        d_volume_fraction_d_design_vars = d_volume_fraction_d_design_vars / np.max(
+            abs(d_volume_fraction_d_design_vars)
+        )
+
+        # update_design_variables()
+        xmma, ymma, zmma, lam, xsi, eta, mu, zet, ss, low, upp = mma.mmasub(
+            m=1,
+            n=5 * len(component_list),
+            iter=iteration + 1,
+            # [x, y, angle, length, thickness]
+            xval=np.expand_dims(design_variables, 1),
+            xmin=xmin,
+            xmax=xmax,
+            xold1=design_variables_prev,
+            xold2=design_variables_prev_2,
+            f0val=np.expand_dims(np.array([f0val]), 1),
+            df0dx=np.expand_dims(d_objective_d_design_vars, 1),
+            fval=fval,
+            dfdx=np.expand_dims(d_volume_fraction_d_design_vars, 0),
+            low=low,
+            upp=upp,
+            a0=a0,
+            a=a,
+            c=c,
+            d=d,
+            move=1.0,
+        )
+
+        # Update the components
+        design_variables_prev_2 = design_variables_prev.copy()
+        design_variables_prev = design_variables.copy()
+        design_variables = xmma.copy()
+        # change = np.max(abs(design_variables - design_variables_prev))
+        component_list = [
+            components.UniformBeam(
+                center=components.Point2D(x, y),
+                angle=angle,
+                length=length,
+                thickness=thickness,
+            )
+            for x, y, angle, length, thickness in design_variables.reshape(-1, 5)
+        ]
+        if iteration % 5 == 0:
+            new_phi, _ = calculate_φ(component_list, domain.node_coordinates)
+            components.plot_φ(new_phi, domain.num_nodes)
+            pass
+
+        # if is_converged():
+        #     break
 
 
 def define_objective() -> None:
@@ -196,7 +335,7 @@ def define_constraints() -> None:
     raise NotImplementedError
 
 
-def initialise_components(n_x, n_y, domain: Domain2D) -> list[Component]:
+def initialise_components(n_x, n_y, domain: Domain2D) -> list[components.Component]:
     """Initialises a grid of crossed Uniform Beams in the domain
 
     Parameters:
@@ -219,7 +358,7 @@ def initialise_components(n_x, n_y, domain: Domain2D) -> list[Component]:
     angle: float = np.atan2(region_size[1], region_size[0])
     length: float = np.linalg.norm(region_size)
 
-    component_list: list[Component] = []
+    component_list: list[components.Component] = []
     for y, x in itertools.product(y_coords, x_coords):
         for sign in [-1, 1]:
             component_list.append(
@@ -235,26 +374,30 @@ def initialise_components(n_x, n_y, domain: Domain2D) -> list[Component]:
 
 
 def calculate_φ(
-    component_list: list[Component], coordinates, ks_aggregation_power: int = 100
-) -> NDArray:
+    component_list: list[components.Component],
+    coordinates,
+    ks_aggregation_power: int = 10,  # Was 100 but getting NAN
+) -> tuple[NDArray, NDArray]:
     """Calculates the level set function φ"""
     # TODO: domain returns coordinate generator. When/if to convert to NDArray?
     coords = np.array(list(coordinates))
     coords = np.fliplr(
         coords
     )  # TODO: currently (y, x) as the way product generates it.
-    φs = np.array([component(coords) for component in component_list])
+    φ_components = np.array([component(coords) for component in component_list])
     ## Simple max aggregation
-    # φ: NDArray = np.max(φs, axis=0)
+    # φ_simple: NDArray = np.max(φs, axis=0)
 
     # Kolmogorov-Smirnov (KS) aggregation as per the original MMC-2D code
-    temp: NDArray = np.exp(φs * ks_aggregation_power)
-    φ: NDArray = np.maximum(
+    temp: NDArray = np.exp(φ_components * ks_aggregation_power)
+    φ_global: NDArray = np.maximum(
         np.full(temp.shape[1], -1e3),
         np.log(np.sum(temp, axis=0)) / ks_aggregation_power,
     )
 
-    return φ
+    dφ_global_dφ_components = temp / np.sum(temp, axis=0)
+
+    return φ_global, dφ_global_dφ_components
 
 
 def finite_element() -> None:
@@ -364,6 +507,10 @@ def make_stiffness_matrix(
 
     K_e: NDArray = K_e_triu + K_e_triu.T - np.diag(np.diag(K_e_triu))
     return K_e
+
+
+def plot_values(values: NDArray, domain_shape: tuple[int, int]) -> None:
+    return px.imshow(values.reshape(domain_shape, order="F").T, origin="lower")
 
 
 if __name__ == "__main__":
