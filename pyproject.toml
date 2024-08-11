@@ -12,7 +12,7 @@ sympy = "^1.13.1"
 plotly = "^5.23.0"
 pandas = "^2.2.2"
 scipy = "^1.14.0"
-jax = "^0.4.31"
+jax = { extras = ["cuda12"], version = "^0.4.31" }
 tqdm = "^4.66.5"
 
 

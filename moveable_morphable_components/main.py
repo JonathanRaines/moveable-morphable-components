@@ -3,22 +3,24 @@ from typing import Generator
 
 
 import numpy as np  # Might be worth going to JAX for GPU acceleration
+import jax.numpy as jnp
 from numpy.typing import NDArray
 
 import plotly.express as px
-from scipy.sparse.linalg import spsolve
+
+# from scipy.sparse.linalg import spsolve
 import tqdm
 
 import components
 import method_moving_asymptotes as mma
 
 E: float = 1  # 000.0  # Young's modulus
-α: float = 1e-9  # Young's modulus of void
+α: float = 1e-2  # 1e-9  # Young's modulus of void
 ε: float = 0.3  # Size of transition region for the smoothed Heaviside function
 ν: float = 0.3  # Poisson's ratio
 t: float = 1.0  # Thickness
 
-MAX_ITERATIONS: int = 100
+MAX_ITERATIONS: int = 500
 VOLUME_FRACTION: float = 0.4
 
 
@@ -40,6 +42,9 @@ class Domain2D:
         self,
         dimensions: tuple[float, float],
         num_elements: tuple[int, int],
+        E: float = 1.0,
+        ν: float = 0.3,
+        t: float = 1.0,
     ) -> None:
         self.dimensions: NDArray = np.array(dimensions, dtype=np.float32)
         self.num_elements: NDArray = np.array(num_elements, dtype=np.int32)
@@ -48,6 +53,53 @@ class Domain2D:
         self.num_dofs: int = 2 * np.prod(self.num_nodes)
 
         self.element_size: NDArray = dimensions / self.num_elements
+
+        self.K_e: NDArray = make_stiffness_matrix(E, ν, self.element_size, t)
+
+        element_ids: NDArray = np.arange(np.prod(self.num_elements))
+        element_multi_index = np.array(
+            np.unravel_index(element_ids, self.num_elements, order="F")
+        ).T
+        node_global_multi_index = np.array(
+            [
+                element_multi_index,
+                element_multi_index + [1, 0],
+                element_multi_index + [1, 1],
+                element_multi_index + [0, 1],
+            ]
+        ).reshape((-1, 2), order="F")
+
+        # The global node ids for each element
+        # Start in top left, sweep along x direction, then down a row.
+        # Nodes are numbered starting in the bottom left corner and moving anti-clockwise
+        # 4 nodes per element. Adjacent elements share nodes.
+        """
+            8   9  10  11
+            *---*---*---*
+            | 3 | 4 | 5 |
+          4 *---*---*---* 7
+            | 0 | 1 | 2 |
+            *---*---*---*
+            0   1   2   3
+        """
+        self.node_global_indices = np.ravel_multi_index(
+            (node_global_multi_index[:, 0], node_global_multi_index[:, 1]),
+            self.num_nodes,
+            order="F",
+        )
+        self.dof_indices = np.array(
+            [
+                2 * self.node_global_indices,
+                2 * self.node_global_indices + 1,
+            ]
+        ).flatten(order="F")
+        self.element_dof_global_indices = self.dof_indices.reshape((-1, 8))
+
+        # # GPT Suggestion
+        # self.K_over_E[
+        #     self.element_dof_global_indices[:, :, np.newaxis],
+        #     self.element_dof_global_indices[:, np.newaxis, :],
+        # ] += self.K_e * element_densities[:, np.newaxis, np.newaxis]
 
     # TODO currently (y, x) as the way product generates it.
     @property
@@ -61,6 +113,7 @@ class Domain2D:
 def main() -> None:
     domain: Domain2D = Domain2D(dimensions=(2.0, 1.0), num_elements=(80, 40))
     # domain: Domain2D = Domain2D(dimensions=(1.0, 1.0), num_elements=(3, 2))
+    # domain: Domain2D = Domain2D(dimensions=(1.0, 1.0), num_elements=(2, 1))
     # domain: Domain2D = Domain2D(dimensions=(1.0, 1.0), num_elements=(1, 1))
 
     # define_objective() # TODO
@@ -88,20 +141,31 @@ def main() -> None:
     loaded_dofs = np.zeros(domain.num_dofs, dtype=bool)
     loaded_dofs[[loaded_dof_ids]] = True
 
-    F = np.zeros(domain.num_dofs)
-    F[2 * loaded_node_ids + 1] = -1.0  # Force in negative y direction
+    F = jnp.zeros(domain.num_dofs)
+    F = F.at[2 * loaded_node_ids + 1].set(-1.0)  # Force in negative y direction
 
     # Generate the iniiial components
     component_list: list[components.Component] = initialise_components(
-        n_x=2,  # 4,
-        n_y=1,  # 2,
+        n_x=4,
+        n_y=2,
         domain=domain,
     )
 
+    # Define the initial values for the design variables
+    initial_design_variables = np.expand_dims(
+        np.array(
+            [list(component.design_variables) for component in component_list]
+        ).flatten(),
+        axis=1,
+    )
+    design_variables = initial_design_variables.copy()
+    design_variables_prev = initial_design_variables.copy()
+    design_variables_prev_2 = initial_design_variables.copy()
+
     # inialise the starting values for mma
-    xmin = np.vstack((0, 0, -np.pi / 2, 0, 0))
-    xmin = np.matlib.repmat(xmin, len(component_list), 1)
-    xmax = np.vstack(
+    xmin = np.array((0, 0, -np.pi / 2, 0.3, 1))
+    xmin = np.expand_dims(np.tile(xmin, len(component_list)), axis=1)
+    xmax = np.array(
         (
             domain.dimensions[0],
             domain.dimensions[1],
@@ -110,7 +174,7 @@ def main() -> None:
             np.min(domain.dimensions) / 2,
         )
     )
-    xmax = np.matlib.repmat(xmax, len(component_list), 1)
+    xmax = np.expand_dims(np.tile(xmax, len(component_list)), axis=1)
     m = 1
     low = xmin
     upp = xmax
@@ -125,6 +189,9 @@ def main() -> None:
         # plot_values(dφ_dφs[0], domain.num_nodes).show()
         # H is Heaviside(φ)
         H: NDArray = heaviside(φ, transition_width=ε, minimum_value=α)
+        if iteration % 10 == 0:
+            components.plot_φ(H, domain.num_nodes)
+            pass
         # plot_values(H, domain.num_nodes).show()
         # Calculate the derivative of H with respect to φ using the analytical form
         dH_dφ: NDArray = 3 * (1 - α) / (4 * ε) * (1 - φ**2 / ε**2)
@@ -153,69 +220,45 @@ def main() -> None:
             axis=0,
         ).flatten(order="F")
 
-        U: NDArray = np.zeros(domain.num_dofs)
-        K_e: NDArray = make_stiffness_matrix(E, ν, domain.element_size, t)
-        element_ids = np.arange(np.prod(domain.num_elements))
-        element_multi_index = np.array(
-            np.unravel_index(element_ids, domain.num_elements, order="F")
-        ).T
-        node_global_multi_index = np.array(
-            [
-                element_multi_index,
-                element_multi_index + [1, 0],
-                element_multi_index + [1, 1],
-                element_multi_index + [0, 1],
-            ]
-        ).reshape((-1, 2), order="F")
+        # Make the stiffness matrix
+        # K = np.zeros((domain.num_dofs, domain.num_dofs))
+        # K[
+        #     domain.element_dof_global_indices[:, :, np.newaxis],
+        #     domain.element_dof_global_indices[:, np.newaxis, :],
+        # ] += domain.K_e * element_densities[:, np.newaxis, np.newaxis]
+        # K_free = K[free_dofs, :][:, free_dofs]
 
-        # The global node ids for each element
-        # Start in top left, sweep along x direction, then down a row.
-        # Nodes are numbered starting in the bottom left corner and moving anti-clockwise
-        # 4 nodes per element. Adjacent elements share nodes.
-        """
-            8   9  10  11
-            *---*---*---*
-            | 3 | 4 | 5 |
-          4 *---*---*---* 7
-            | 0 | 1 | 2 |
-            *---*---*---*
-            0   1   2   3
-        """
-        node_global_indices = np.ravel_multi_index(
-            (node_global_multi_index[:, 0], node_global_multi_index[:, 1]),
-            domain.num_nodes,
-            order="F",
-        )
-        dof_indices = np.array(
-            [
-                2 * node_global_indices,
-                2 * node_global_indices + 1,
-            ]
-        ).flatten(order="F")
-
+        # Old way of doing it
         K = np.zeros((domain.num_dofs, domain.num_dofs))
 
         for element, element_dof_global_indices in enumerate(
-            dof_indices.reshape((-1, 8))
+            domain.dof_indices.reshape((-1, 8))
         ):
             for i, j in itertools.product(range(8), range(8)):
                 K[element_dof_global_indices[i], element_dof_global_indices[j]] += (
-                    K_e[i, j] * element_densities[element]
+                    domain.K_e[i, j] * element_densities[element]
                 )
-        K_free = K[free_dofs, :][:, free_dofs]
 
-        U[free_dofs] = np.linalg.solve(K_free, F[free_dofs])
+        K_free = jnp.array(K[free_dofs, :][:, free_dofs])
+
+        # plot_values(K[0, :][::2], domain.num_nodes).show()
+        # plot_values(K[20 * domain.num_nodes[0] + 25, :][::2], domain.num_nodes).show()
+        # plot_values(K[20 * domain.num_nodes[0] + 75, :][::2], domain.num_nodes).show()
+
+        # Solve the system
+        U: NDArray = jnp.zeros(domain.num_dofs)
+        U = U.at[free_dofs].set(jnp.linalg.solve(K_free, F[free_dofs]))
 
         # Visualise the result TODO debug
         # X displacements
         # plot_values(U[::2], domain.num_nodes).show()
-        # # Y displacements
+        # Y displacements
         # plot_values(U[1::2], domain.num_nodes).show()
 
         # Calculate the Energy of the Elements
-        U_by_element = U[dof_indices.reshape((-1, 8))]
+        U_by_element = U[domain.dof_indices.reshape((-1, 8))]
         element_energy = np.sum(
-            (U_by_element @ K_e) * U_by_element,
+            (U_by_element @ domain.K_e) * U_by_element,
             axis=1,
         ).reshape(domain.num_elements, order="F")
         # plot_values(element_energy, domain.num_elements).show()
@@ -239,8 +282,6 @@ def main() -> None:
         # s_energy = np.expand_dims(energy, axis=1) @ np.ones((1, 4) / 4
         # node_energy[node_global_indices] = sum(s_energy[node_global_indices]
 
-        comp = F.T @ U
-
         # sensitivity_analysis()
         design_variables = np.array(
             [list(component.design_variables) for component in component_list]
@@ -252,30 +293,39 @@ def main() -> None:
         design_variables_prev = initial_design_variables.copy()
         design_variables_prev_2 = initial_design_variables.copy()
 
-        # components x design variables x nodes
-        d_objective_d_design_vars = np.nansum(
+        # Objective and derivative
+        objective = F.T @ U
+        d_objective_d_design_vars = jnp.nansum(
             -node_energy * dH_dφ * dφ_d_design_vars, axis=1
         )
-        # for d_obj_d_dv in d_objective_d_design_var:
-        #     plot_values(
-        #         d_obj_d_dv,
-        #         domain.num_nodes,
-        #     ).show()
-        d_volume_fraction_d_design_vars = np.nansum(
-            node_volumes * dH_dφ * dφ_d_design_vars,
-            axis=1,
-        )
 
-        f0val = comp
-        d_objective_d_design_vars = (-d_objective_d_design_vars) / np.max(
-            abs(d_objective_d_design_vars)
-        )
-        fval = (
+        # Volume fraction constraint and derivative
+        volume_fraction_constraint = (
             np.sum(node_densities)
             * np.prod(domain.element_size)
             / np.prod(domain.dimensions)
             - VOLUME_FRACTION
         )
+        d_volume_fraction_d_design_vars = np.nansum(
+            node_volumes
+            * dH_dφ
+            * dφ_d_design_vars
+            * np.prod(domain.element_size)
+            / np.prod(domain.dimensions),
+            axis=1,
+        )
+
+        # digit = 5 - np.floor(np.log10(np.max(abs(d_objective_d_design_vars))))
+        # d_objective_d_design_vars = np.round(d_objective_d_design_vars, digit)
+        # digit = 5 - np.floor(np.log10(np.max(abs(d_volume_fraction_d_design_vars))))
+        # d_volume_fraction_d_design_vars = np.round(
+        #     d_volume_fraction_d_design_vars, digit
+        # )
+
+        d_objective_d_design_vars = d_objective_d_design_vars / np.max(
+            abs(d_objective_d_design_vars)
+        )
+
         d_volume_fraction_d_design_vars = d_volume_fraction_d_design_vars / np.max(
             abs(d_volume_fraction_d_design_vars)
         )
@@ -291,9 +341,9 @@ def main() -> None:
             xmax=xmax,
             xold1=design_variables_prev,
             xold2=design_variables_prev_2,
-            f0val=np.expand_dims(np.array([f0val]), 1),
+            f0val=np.expand_dims(np.array([objective]), 1),
             df0dx=np.expand_dims(d_objective_d_design_vars, 1),
-            fval=fval,
+            fval=volume_fraction_constraint,
             dfdx=np.expand_dims(d_volume_fraction_d_design_vars, 0),
             low=low,
             upp=upp,
@@ -318,10 +368,6 @@ def main() -> None:
             )
             for x, y, angle, length, thickness in design_variables.reshape(-1, 5)
         ]
-        if iteration % 5 == 0:
-            new_phi, _ = calculate_φ(component_list, domain.node_coordinates)
-            components.plot_φ(new_phi, domain.num_nodes)
-            pass
 
         # if is_converged():
         #     break
@@ -385,17 +431,19 @@ def calculate_φ(
         coords
     )  # TODO: currently (y, x) as the way product generates it.
     φ_components = np.array([component(coords) for component in component_list])
-    ## Simple max aggregation
-    # φ_simple: NDArray = np.max(φs, axis=0)
+    # Simple max aggregation
+    # φ_global: NDArray = np.max(φ_components, axis=0)
+    # dφ_global_dφ_components = np.zeros_like(φ_components)
+    # dφ_global_dφ_components[np.argmax(φ_components, axis=0)] = 1
 
-    # Kolmogorov-Smirnov (KS) aggregation as per the original MMC-2D code
-    temp: NDArray = np.exp(φ_components * ks_aggregation_power)
-    φ_global: NDArray = np.maximum(
-        np.full(temp.shape[1], -1e3),
-        np.log(np.sum(temp, axis=0)) / ks_aggregation_power,
+    # # Kolmogorov-Smirnov (KS) aggregation as per the original MMC-2D code
+    temp: NDArray = jnp.exp(φ_components * ks_aggregation_power)
+    φ_global: NDArray = jnp.maximum(
+        jnp.full(temp.shape[1], -1e3),
+        jnp.log(np.sum(temp, axis=0)) / ks_aggregation_power,
     )
 
-    dφ_global_dφ_components = temp / np.sum(temp, axis=0)
+    dφ_global_dφ_components = temp / jnp.sum(temp, axis=0)
 
     return φ_global, dφ_global_dφ_components
 
@@ -438,12 +486,13 @@ def heaviside(
         >>> heaviside(np.array([-1.0, 1.0]), 0.1, 0.1)
         array([0.1 , 1. ])
     """
+    x = jnp.array(x)
     h_x = (
         3 * (1 - x) / 4 * (x / transition_width - x**3 / (3 * transition_width**3))
         + (1 + minimum_value) / 2
     )
-    h_x = np.where(x < -transition_width, minimum_value, h_x)
-    h_x = np.where(x > transition_width, 1, h_x)
+    h_x = jnp.where(x < -transition_width, minimum_value, h_x)
+    h_x = jnp.where(x > transition_width, 1, h_x)
     return h_x
 
 
