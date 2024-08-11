@@ -21,7 +21,7 @@ def test_heaviside():
 
 
 def test_domain():
-    domain = Domain2D(dimensions=(1.0, 2.0), num_elements=(10, 10))
+    domain = Domain2D(dimensions=(1.0, 2.0), element_shape=(10, 10))
 
     assert all(domain.dimensions == (1.0, 2.0))
     assert all(domain.num_elements == (10, 10))
