@@ -11,7 +11,8 @@
             "program": "${file}",
             "console": "integratedTerminal",
             "env": {
-                "XLA_PYTHON_CLIENT_PREALLOCATE": "False"
+                "XLA_PYTHON_CLIENT_PREALLOCATE": "False",
+                "XLA_PYTHON_CLIENT_MEM_FRACTION": "0.5"
             }
         }
     ]
