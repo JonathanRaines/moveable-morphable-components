@@ -70,6 +70,7 @@ def element_stiffness_matrix(
         )
     )
 
+    # Mirror the upper triangular matrix to get the full matrix
     element_stiffness_matrix: NDArray = (
         element_stiffness_matrix_triu
         + element_stiffness_matrix_triu.T
@@ -79,40 +80,24 @@ def element_stiffness_matrix(
 
 
 def assemble_stiffness_matrix(
-    element_dof_ids: NDArray,
-    element_densities: NDArray,
-    element_stiffness_matrix: NDArray,
-):
-    # Make the stiffness matrix
+    element_dof_ids: NDArray[np.uint],
+    element_densities: NDArray[float],
+    element_stiffness_matrix: NDArray[float],
+) -> scipy.sparse.csc_matrix:
+    """
+    Assemble the stiffness matrix from the element stiffness matrices and densities
+
+    Parameters:
+        element_dof_ids: NDArray[np.uint] - The global DOF indices for each element (8 x num_elements)
+            Numbering is clockwise from the bottom left corner
+        element_densities: NDArray[float] - The density of each element
+        element_stiffness_matrix: NDArray[float] - The stiffness matrix for a single element
+    """
     num_dofs: int = np.max(element_dof_ids) + 1
-    # stiffness_matrix: NDArray = np.zeros((num_dofs, num_dofs))
 
-    # TODO vectorised way currently broken
-    # K[
-    #     element_dof_ids[:, :, np.newaxis],
-    #     element_dof_ids[:, np.newaxis, :],
-    # ] += K_e * element_densities.flatten(order="F")[:, np.newaxis, np.newaxis]
-
-    # Old way of doing it
-
-    # for element, dof_ids in enumerate(element_dof_ids):
-    #     for i, j in itertools.product(range(8), range(8)):
-    #         K[dof_ids[i], dof_ids[j]] += (
-    #             K_e[i, j] * element_densities.flatten(order="F")[element]
-    #         )
-
-    # return K
-
-    # for element, dof_ids in enumerate(element_dof_ids):
-    #     element_stiffness = (
-    #         element_stiffness_matrix * element_densities.flatten(order="F")[element]
-    #     )
-    #     stiffness_matrix[np.ix_(dof_ids, dof_ids)] += element_stiffness
-    # return stiffness_matrix
-
-    row = []
-    column = []
-    data = []
+    row: list[int] = []
+    column: list[int] = []
+    data: list[float] = []
     element_densities_flat = element_densities.flatten(order="F")
     for element, dof_ids in enumerate(element_dof_ids):
         element_stiffness = element_stiffness_matrix * element_densities_flat[element]
@@ -124,7 +109,3 @@ def assemble_stiffness_matrix(
     return scipy.sparse.coo_array(
         (data, (row, column)), shape=(num_dofs, num_dofs)
     ).tocsc()
-
-
-def solve_displacements(K, F):
-    return jnp.linalg.solve(K, F)
