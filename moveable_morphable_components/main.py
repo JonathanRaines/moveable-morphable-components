@@ -28,7 +28,7 @@ A0 = 1
 A = np.zeros((NUM_CONSTRAINTS, 1))
 C = np.full((NUM_CONSTRAINTS, 1), 1000)
 D = np.zeros((NUM_CONSTRAINTS, 1))
-MOVE = 1.0
+MOVE = 0.025
 
 MAX_ITERATIONS: int = 500
 VOLUME_FRACTION: float = 0.4
@@ -343,12 +343,15 @@ def main() -> None:
             for x, y, angle, length, thickness in design_variables.reshape(-1, 5)
         ]
 
-        # if is_converged():
-        #     break
-        if iteration > 5 and volume_fraction_constraint / VOLUME_FRACTION < 1e-4:
-            objective_change = np.abs(
-                np.max(np.abs(objective_history[-5:]) - np.mean(objective_history[-5:]))
-            ) / np.mean(objective_history[-5:])
+        if is_converged(
+            iteration=iteration,
+            objective_tolerance=5.0,
+            objective_history=objective_history,
+            constraint_tolerance=1e-4,
+            constraint_error=volume_fraction_constraint / VOLUME_FRACTION,
+            window_size=5,
+        ):
+            break
 
 
 def initialise_components(n_x, n_y, domain: Domain2D) -> list[components.Component]:
@@ -426,8 +429,28 @@ def update_design_variables() -> None:
     raise NotImplementedError
 
 
-def is_converged() -> bool:
-    raise NotImplementedError
+def is_converged(
+    iteration,
+    objective_tolerance,
+    objective_history,
+    constraint_tolerance,
+    constraint_error,
+    window_size,
+) -> bool:
+    if iteration > window_size and constraint_error < constraint_tolerance:
+        smoothed_objective_change: NDArray = moving_average(
+            objective_history, window_size
+        )
+        smoothed_objective_deltas: NDArray = np.diff(smoothed_objective_change)
+        if np.all(smoothed_objective_deltas < objective_tolerance):
+            return True
+        return False
+
+
+def moving_average(values, n):
+    ret: NDArray = np.cumsum(values, dtype=float)
+    ret[n:] = ret[n:] - ret[:-n]
+    return ret[n - 1 :] / n
 
 
 def heaviside(
