@@ -89,6 +89,12 @@ class Domain2D:
             -1,
         ).reshape(-1, 8)
 
+        self.node_volumes = (
+            self.element_value_to_nodes(np.ones(self.element_shape)).flatten(order="F")
+            * np.prod(self.element_size)
+            / np.prod(self.dimensions)
+        )
+
     # TODO currently (y, x) as the way product generates it.
     @property
     def node_coordinates(self) -> Generator[tuple[float, float], None, None]:
@@ -147,7 +153,7 @@ class Domain2D:
             NDArray - The property averaged to the element
         """
         # Reshape to the domain
-        _node_prop = node_property.reshape(self.node_shape)
+        _node_prop = node_property.reshape(self.node_shape, order="F")
 
         element_densities: NDArray = np.mean(
             np.array(

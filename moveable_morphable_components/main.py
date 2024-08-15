@@ -18,10 +18,17 @@ import finite_element
 import method_moving_asymptotes as mma
 
 E: float = 1e5  # 1e7  # Young's modulus
-α: float = 1e-4  # 1e-9  # Young's modulus of void
-ε: float = 0.1  # Size of transition region for the smoothed Heaviside function
+α: float = 1e-3  # Heaviside minimum value
+ε: float = 0.3  # Size of transition region for the smoothed Heaviside function
 ν: float = 0.3  # Poisson's ratio
 t: float = 1.0  # Thickness
+
+NUM_CONSTRAINTS = 1  # Volume fraction constraint
+A0 = 1
+A = np.zeros((NUM_CONSTRAINTS, 1))
+C = np.full((NUM_CONSTRAINTS, 1), 1000)
+D = np.zeros((NUM_CONSTRAINTS, 1))
+MOVE = 1.0
 
 MAX_ITERATIONS: int = 500
 VOLUME_FRACTION: float = 0.4
@@ -32,7 +39,7 @@ def main() -> None:
     # domain: Domain2D = Domain2D(dimensions=(2.0, 1.0), element_shape=(20, 10))
     # domain: Domain2D = Domain2D(dimensions=(1.0, 1.0), element_shape=(3, 2))
     # domain: Domain2D = Domain2D(dimensions=(1.0, 0.2), element_shape=(5, 1))
-    # domain: Domain2D = Domain2D(dimensions=(1.0, 1.0), element_shape=(2, 1))
+    # domain: Domain2D = Domain2D(dimensions=(1.0, 1.0), element_shape=(2, 2))
     # domain: Domain2D = Domain2D(dimensions=(1.0, 1.0), element_shape=(1, 1))
 
     # define_objective() # TODO
@@ -56,7 +63,7 @@ def main() -> None:
     # F = F.at[loaded_dof_ids[1]].set(-1_000.0)  # Force in negative y direction (N)
     # F = F.at[loaded_dof_ids[0]].set(1_000.0)  # Tensile Force in positive x direction (N)
     F = scipy.sparse.csc_array(
-        ([-1_000], ([loaded_dof_ids[1]], [0])), shape=(domain.num_dofs, 1)
+        ([-100], ([loaded_dof_ids[1]], [0])), shape=(domain.num_dofs, 1)
     )
 
     # Define the element stiffness matrix
@@ -74,9 +81,9 @@ def main() -> None:
     # component_list: list[components.Component] = [
     #     components.UniformBeam(
     #         center=components.Point2D(*domain.dimensions / 2),
-    #         angle=0.0,
-    #         length=domain.dimensions[0],
-    #         thickness=0.2,
+    #         angle=np.pi / 2,
+    #         length=domain.dimensions[1],
+    #         thickness=0.4,
     #     )
     # ]
 
@@ -88,7 +95,7 @@ def main() -> None:
         axis=1,
     )
 
-    design_variables_min = np.array((0, 0, -np.pi / 2, 0.3, 1))
+    design_variables_min = np.array((0, 0, -np.pi / 2, 0.1, 0.01))
     design_variables_min = np.expand_dims(
         np.tile(design_variables_min, len(component_list)), axis=1
     )
@@ -106,19 +113,19 @@ def main() -> None:
     )
 
     # initialise the starting values for mma optimization
-    m = 1
     design_variables = initial_design_variables.copy()
     design_variables_prev = initial_design_variables.copy()
     design_variables_prev_2 = initial_design_variables.copy()
     low = design_variables_min
     upp = design_variables_max
-    a0 = 1
-    a = np.zeros((m, 1))
-    c = np.full((m, 1), 1000)
-    d = np.zeros((m, 1))
 
+    objective_change = 1.0
+    objective_history = []
     # Optimisation loop
     for iteration in tqdm.trange(MAX_ITERATIONS):
+        if objective_change < 1e-4:
+            break
+
         # Combine the level set functions from the components to form a global one
         # dφ_dφs is the derivative of the global level set function with respect to the component level set functions
         # It is 1 where the component is the maximum and 0 elsewhere
@@ -137,16 +144,16 @@ def main() -> None:
 
         # Plot every 10 iterations
         if iteration % 10 == 0:
-            go.Figure(
-                data=go.Contour(
-                    z=φ.reshape(domain.node_shape, order="F").T,
-                    contours=dict(
-                        start=0,
-                        end=1,
-                        size=0.1,
-                    ),
-                )
-            ).show()
+            # go.Figure(
+            #     data=go.Contour(
+            #         z=φ.reshape(domain.node_shape, order="F").T,
+            #         contours=dict(
+            #             start=0,
+            #             end=1,
+            #             size=0.1,
+            #         ),
+            #     )
+            # ).show()
             go.Figure(
                 data=go.Contour(
                     z=H.reshape(domain.node_shape, order="F").T,
@@ -170,6 +177,7 @@ def main() -> None:
 
         # Calculate the density of the elements
         element_densities: NDArray = domain.average_node_values_to_element(H)
+        # plot_values(element_densities, domain.element_shape).show()
 
         # Stiffness Matrix
         K = finite_element.assemble_stiffness_matrix(
@@ -177,6 +185,12 @@ def main() -> None:
             element_densities=element_densities,
             element_stiffness_matrix=K_e,
         )
+
+        # k_display = K.toarray()
+        # k_diag_x = np.diag(k_display)[::2]
+        # plot_values(k_diag_x, domain.node_shape).show()
+        # # k_diag_y = np.diag(k_display)[1::2]
+        # # plot_values(k_diag_y, domain.node_shape).show()
 
         # K_free: NDArray = K[np.ix_(free_dofs, free_dofs)]
         # K_free = jnp.array(K_free)
@@ -191,13 +205,16 @@ def main() -> None:
         U: NDArray = np.zeros(domain.num_dofs)
         U[free_dofs] = scipy.sparse.linalg.spsolve(K_free, F[free_dofs])
 
-        # # Visualise the result TODO debug
-        # # X displacements
-        # plot_values(U[::2], domain.node_shape).show()
-        # # Y displacements
-        # plot_values(U[1::2], domain.node_shape).show()
-        # Total displacements
-        # plot_values(np.linalg.norm([U[::2], U[1::2]], axis=0), domain.node_shape).show()
+        # if iteration % 10 == 0:
+        #     # # Visualise the result TODO debug
+        #     # # X displacements
+        #     plot_values(U[::2], domain.node_shape).show()
+        #     # # Y displacements
+        #     plot_values(U[1::2], domain.node_shape).show()
+        #     # Total displacements
+        #     plot_values(
+        #         np.linalg.norm([U[::2], U[1::2]], axis=0), domain.node_shape
+        #     ).show()
 
         # Calculate the Energy of the Elements
         U_by_element = U[domain.element_dof_ids]
@@ -210,9 +227,6 @@ def main() -> None:
         node_energy = domain.element_value_to_nodes(element_energy).flatten(order="F")
         # plot_values(node_energy, domain.node_shape).show()
 
-        node_volumes = domain.element_value_to_nodes(
-            np.ones(domain.element_shape)
-        ).flatten(order="F")
         # plot_values(node_volumes, domain.node_shape).show()
 
         # sensitivity_analysis()
@@ -225,38 +239,46 @@ def main() -> None:
 
         # Objective and derivative
         objective = F.T @ U
-        d_objective_d_design_vars = jnp.nansum(
+        objective_history.append(objective)
+        d_objective_d_design_vars = np.nansum(
             -node_energy * dH_dφ * dφ_d_design_vars, axis=1
         )
+        # if iteration % 10 == 0:
+        #     plot_values(-node_energy, domain.node_shape).show()
+        #     plot_values(-dH_dφ, domain.node_shape).show()
 
         # Volume fraction constraint and derivative
         volume_fraction_constraint = (
-            np.sum(H) * np.prod(domain.element_size) / np.prod(domain.dimensions)
+            np.sum(H * domain.node_volumes) / np.sum(domain.node_volumes)
             - VOLUME_FRACTION
         )
         d_volume_fraction_d_design_vars = np.nansum(
-            node_volumes
-            * dH_dφ
-            * dφ_d_design_vars
-            * np.prod(domain.element_size)
-            / np.prod(domain.dimensions),
+            domain.node_volumes * dH_dφ * dφ_d_design_vars,
             axis=1,
         )
 
-        # digit = 5 - np.floor(np.log10(np.max(abs(d_objective_d_design_vars))))
-        # d_objective_d_design_vars = np.round(d_objective_d_design_vars, digit)
-        # digit = 5 - np.floor(np.log10(np.max(abs(d_volume_fraction_d_design_vars))))
+        # digit = (5 - np.floor(np.log10(np.max(abs(d_objective_d_design_vars))))).astype(
+        #     np.int32
+        # )
+        # d_objective_d_design_vars = np.round(d_objective_d_design_vars, digit).astype(
+        #     np.float64
+        # )
+        # digit = 5 - np.floor(
+        #     np.log10(np.max(abs(d_volume_fraction_d_design_vars)))
+        # ).astype(np.int32)
         # d_volume_fraction_d_design_vars = np.round(
         #     d_volume_fraction_d_design_vars, digit
-        # )
+        # ).astype(np.float64)
 
-        # d_objective_d_design_vars = d_objective_d_design_vars / np.max(
-        #     abs(d_objective_d_design_vars)
-        # )
-
-        # d_volume_fraction_d_design_vars = d_volume_fraction_d_design_vars / np.max(
-        #     abs(d_volume_fraction_d_design_vars)
-        # )
+        scale_factor = np.max(
+            np.abs(
+                np.concatenate(
+                    [d_objective_d_design_vars, d_volume_fraction_d_design_vars]
+                )
+            )
+        )
+        d_objective_d_design_vars /= scale_factor
+        d_volume_fraction_d_design_vars /= scale_factor
 
         # update_design_variables()
         xmma, ymma, zmma, lam, xsi, eta, mu, zet, ss, low, upp = mma.mmasub(
@@ -275,12 +297,36 @@ def main() -> None:
             dfdx=np.expand_dims(d_volume_fraction_d_design_vars, 0),
             low=low,
             upp=upp,
-            a0=a0,
-            a=a,
-            c=c,
-            d=d,
-            move=1.0,
+            a0=A0,
+            a=A,
+            c=C,
+            d=D,
+            move=MOVE,
         )
+
+        # xmma, ymma, zmma, lam, xsi, eta, mu, zet, ss, low, upp = mma.gmmasub(
+        #     m=1,
+        #     n=5 * len(component_list),
+        #     iter=iteration + 1,
+        #     # [x, y, angle, length, thickness]
+        #     epsimin=1e-7,
+        #     xval=design_variables,
+        #     xmin=design_variables_min,
+        #     xmax=design_variables_max,
+        #     xold1=design_variables_prev,
+        #     xold2=design_variables_prev_2,
+        #     f0val=np.expand_dims(np.array([objective]), 1),
+        #     df0dx=np.expand_dims(d_objective_d_design_vars, 1),
+        #     fval=volume_fraction_constraint,
+        #     dfdx=np.expand_dims(d_volume_fraction_d_design_vars, 0),
+        #     low=low,
+        #     upp=upp,
+        #     a0=a0,
+        #     a=a,
+        #     c=c,
+        #     d=d,
+        #     move=1.0,
+        # )
 
         # Update the components
         design_variables_prev_2 = design_variables_prev.copy()
@@ -299,6 +345,10 @@ def main() -> None:
 
         # if is_converged():
         #     break
+        if iteration > 5 and volume_fraction_constraint / VOLUME_FRACTION < 1e-4:
+            objective_change = np.abs(
+                np.max(np.abs(objective_history[-5:]) - np.mean(objective_history[-5:]))
+            ) / np.mean(objective_history[-5:])
 
 
 def initialise_components(n_x, n_y, domain: Domain2D) -> list[components.Component]:
@@ -402,13 +452,16 @@ def heaviside(
         >>> heaviside(np.array([-1.0, 1.0]), 0.1, 0.1)
         array([0.1 , 1. ])
     """
-    x = jnp.array(x)
+    x = np.array(x)
     h_x = (
-        3 * (1 - x) / 4 * (x / transition_width - x**3 / (3 * transition_width**3))
+        3
+        * (1 - minimum_value)
+        / 4
+        * (x / transition_width - x**3 / (3 * transition_width**3))
         + (1 + minimum_value) / 2
     )
-    h_x = jnp.where(x < -transition_width, minimum_value, h_x)
-    h_x = jnp.where(x > transition_width, 1, h_x)
+    h_x = np.where(x < -transition_width, minimum_value, h_x)
+    h_x = np.where(x > transition_width, 1, h_x)
     return h_x
 
 
