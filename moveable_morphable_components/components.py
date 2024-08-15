@@ -1,6 +1,7 @@
 from dataclasses import dataclass
 import itertools
-from typing import Generator
+from typing import Callable
+from functools import partial
 
 import jax
 import jax.numpy as np
@@ -15,6 +16,27 @@ class Point2D:
 
     def __repr__(self) -> str:
         return f"({self.x}, {self.y})"
+
+
+def circle(
+    x: float, y: float, center_x: float, center_y: float, radius: float
+) -> tuple[Callable, Callable]:
+    assert all([isinstance(i, float) for i in [x, y, center_x, center_y, radius]])
+
+    def phi(center_x, center_y, radius, x, y):
+        return radius**2 - (x - center_x) ** 2 - (y - center_y) ** 2
+
+    phi_grad = jax.grad(phi, argnums=(0, 1, 2))
+
+    return (
+        partial(phi, center_x, center_y, radius),
+        partial(
+            phi_grad,
+            center_x,
+            center_y,
+            radius,
+        ),
+    )
 
 
 class Component:
@@ -130,7 +152,7 @@ class UniformBeam(Component):
         )
 
         φ: NDArray = 1 - np.linalg.norm(
-            np.array([_x / length * 2, _y / thickness * 2]),
+            np.array([(_x / length) * 2, (_y / thickness) * 2]),
             ord=6,
             axis=0,
         )

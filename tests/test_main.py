@@ -19,8 +19,11 @@ def test_heaviside():
 
 def test_make_stiffness_matrix():
     """Confirms the hard-coded stiffness matrix is the same as the one derived using sympy."""
-    k_e_hardcoded = finite_element.make_stiffness_matrix(
-        E=1.0, ν=0.3, element_size=(1.0, 1.0), t=1.0
+    k_e_hardcoded = finite_element.element_stiffness_matrix(
+        youngs_modulus=1.0,
+        poissons_ratio=0.3,
+        element_size=(1.0, 1.0),
+        element_thickness=1.0,
     )
     k_e, t, E, ν, a, b = derive_stiffness_matrix()
     k_e_numeric = np.array(k_e.subs({E: 1.0, ν: 0.3, a: 1.0, b: 1.0, t: 1.0})).astype(

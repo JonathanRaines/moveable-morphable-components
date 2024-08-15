@@ -1,21 +1,22 @@
-import itertools
-
 import jax.numpy as jnp
 import numpy as np
 from numpy.typing import NDArray
 
 
-def make_stiffness_matrix(
-    E: float, ν: float, element_size: tuple[float, float], t: float
+def element_stiffness_matrix(
+    youngs_modulus: float,
+    poissons_ratio: float,
+    element_size: tuple[float, float],
+    element_thickness: float,
 ) -> NDArray:
     """
     Create the stiffness matrix for a single element
 
     Parameters:
-        E: float - Young's modulus
-        ν: float - Poisson's ratio
+        youngs_modulus: float - Young's modulus
+        poissons_ratio: float - Poisson's ratio
         element_size: tuple[float, float] - The size of the element
-        h: float - The thickness of the element
+        element_thickness: float - The thickness of the element
 
     Returns:
         NDArray - The stiffness matrix for a single element
@@ -33,6 +34,11 @@ def make_stiffness_matrix(
     # Note: the indices in the variable names are 1-indexed to match the 218 line code and mathematical matrix notation.
     # They are never indexed on their names or used outside this function.
 
+    # Rename to symbols for equations
+    E: float = youngs_modulus
+    ν: float = poissons_ratio
+    t: float = element_thickness
+
     a, b = element_size
     k_1_1: float = -1 / (6 * a * b) * (a**2 * (ν - 1) - 2 * b**2)
     k_1_2: float = (ν + 1) / 8
@@ -45,7 +51,7 @@ def make_stiffness_matrix(
     k_2_6: float = 1 / (12 * a * b) * (b**2 * (ν - 1) - 2 * a**2)
     k_2_8: float = -1 / (12 * a * b) * (b**2 * (ν - 1) + 4 * a**2)
 
-    K_e_triu: NDArray = (
+    element_stiffness_matrix_triu: NDArray = (
         E
         * t
         / (1 - ν**2)
@@ -63,16 +69,22 @@ def make_stiffness_matrix(
         )
     )
 
-    K_e: NDArray = K_e_triu + K_e_triu.T - np.diag(np.diag(K_e_triu))
-    return K_e
+    element_stiffness_matrix: NDArray = (
+        element_stiffness_matrix_triu
+        + element_stiffness_matrix_triu.T
+        - np.diag(np.diag(element_stiffness_matrix_triu))
+    )
+    return element_stiffness_matrix
 
 
-def stiffness_matrix(
-    element_dof_ids: NDArray, element_densities: NDArray, K_e: NDArray
+def assemble_stiffness_matrix(
+    element_dof_ids: NDArray,
+    element_densities: NDArray,
+    element_stiffness_matrix: NDArray,
 ) -> NDArray:
     # Make the stiffness matrix
     num_dofs: int = np.max(element_dof_ids) + 1
-    K: NDArray = np.zeros((num_dofs, num_dofs))
+    stiffness_matrix: NDArray = np.zeros((num_dofs, num_dofs))
 
     # TODO vectorised way currently broken
     # K[
@@ -82,13 +94,20 @@ def stiffness_matrix(
 
     # Old way of doing it
 
-    for element, dof_ids in enumerate(element_dof_ids):
-        for i, j in itertools.product(range(8), range(8)):
-            K[dof_ids[i], dof_ids[j]] += (
-                K_e[i, j] * element_densities.flatten(order="F")[element]
-            )
+    # for element, dof_ids in enumerate(element_dof_ids):
+    #     for i, j in itertools.product(range(8), range(8)):
+    #         K[dof_ids[i], dof_ids[j]] += (
+    #             K_e[i, j] * element_densities.flatten(order="F")[element]
+    #         )
 
-    return K
+    # return K
+
+    for element, dof_ids in enumerate(element_dof_ids):
+        element_stiffness = (
+            element_stiffness_matrix * element_densities.flatten(order="F")[element]
+        )
+        stiffness_matrix[np.ix_(dof_ids, dof_ids)] += element_stiffness
+    return stiffness_matrix
 
 
 def solve_displacements(K, F):

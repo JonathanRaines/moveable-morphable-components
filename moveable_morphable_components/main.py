@@ -6,6 +6,7 @@ import jax.numpy as jnp
 from numpy.typing import NDArray
 
 import plotly.express as px
+import plotly.graph_objects as go
 import tqdm
 
 
@@ -14,8 +15,8 @@ from domain import Domain2D
 import finite_element
 import method_moving_asymptotes as mma
 
-E: float = 1e7  # Young's modulus
-α: float = 1e-9  # Young's modulus of void
+E: float = 1e5  # 1e7  # Young's modulus
+α: float = 1e-4  # 1e-9  # Young's modulus of void
 ε: float = 0.1  # Size of transition region for the smoothed Heaviside function
 ν: float = 0.3  # Poisson's ratio
 t: float = 1.0  # Thickness
@@ -25,9 +26,10 @@ VOLUME_FRACTION: float = 0.4
 
 
 def main() -> None:
+    domain: Domain2D = Domain2D(dimensions=(2.0, 1.0), element_shape=(80, 40))
     # domain: Domain2D = Domain2D(dimensions=(2.0, 1.0), element_shape=(20, 10))
     # domain: Domain2D = Domain2D(dimensions=(1.0, 1.0), element_shape=(3, 2))
-    domain: Domain2D = Domain2D(dimensions=(1.0, 0.2), element_shape=(5, 1))
+    # domain: Domain2D = Domain2D(dimensions=(1.0, 0.2), element_shape=(5, 1))
     # domain: Domain2D = Domain2D(dimensions=(1.0, 1.0), element_shape=(2, 1))
     # domain: Domain2D = Domain2D(dimensions=(1.0, 1.0), element_shape=(1, 1))
 
@@ -56,22 +58,22 @@ def main() -> None:
     # This is independent of the components or domain
     # It's a function of the material properties and the element size
     # Assumes a bi-linear quadrilateral element
-    K_e: NDArray = finite_element.make_stiffness_matrix(E, ν, domain.element_size, t)
+    K_e: NDArray = finite_element.element_stiffness_matrix(E, ν, domain.element_size, t)
 
     # Generate the initial components
-    # component_list: list[components.Component] = initialise_components(
-    #     n_x=4,
-    #     n_y=2,
-    #     domain=domain,
-    # )
-    component_list: list[components.Component] = [
-        components.UniformBeam(
-            center=components.Point2D(*domain.dimensions / 2),
-            angle=0.0,
-            length=domain.dimensions[0],
-            thickness=0.2,
-        )
-    ]
+    component_list: list[components.Component] = initialise_components(
+        n_x=4,
+        n_y=2,
+        domain=domain,
+    )
+    # component_list: list[components.Component] = [
+    #     components.UniformBeam(
+    #         center=components.Point2D(*domain.dimensions / 2),
+    #         angle=0.0,
+    #         length=domain.dimensions[0],
+    #         thickness=0.2,
+    #     )
+    # ]
 
     # Define the initial values for the design variables
     initial_design_variables = np.expand_dims(
@@ -130,12 +132,31 @@ def main() -> None:
 
         # Plot every 10 iterations
         if iteration % 10 == 0:
-            components.plot_φ(H, domain.node_shape)
+            go.Figure(
+                data=go.Contour(
+                    z=φ.reshape(domain.node_shape, order="F").T,
+                    contours=dict(
+                        start=0,
+                        end=1,
+                        size=0.1,
+                    ),
+                )
+            ).show()
+            go.Figure(
+                data=go.Contour(
+                    z=H.reshape(domain.node_shape, order="F").T,
+                    contours=dict(
+                        start=0,
+                        end=1,
+                        size=0.1,
+                    ),
+                )
+            ).show()
             pass
 
         coords = np.fliplr(np.array(list(domain.node_coordinates)))
         # Calculate the derivative of φ with respect to the design variables
-        dφ_component_d_design_vars = np.concat(
+        dφ_component_d_design_vars = np.concatenate(
             [comp.φ_grad(coords[:, 0], coords[:, 1]) for comp in component_list]
         )
         dφ_d_design_vars = np.repeat(dφ_dφs, 5, axis=0) * dφ_component_d_design_vars
@@ -145,15 +166,15 @@ def main() -> None:
         # Calculate the density of the elements
         element_densities: NDArray = domain.average_node_values_to_element(H)
 
-        K = finite_element.stiffness_matrix(
-            domain.element_dof_ids,
-            # element_densities * E,
-            np.ones(domain.element_shape) * E,
-            K_e,
+        # Stiffness Matrix
+        K: NDArray = finite_element.assemble_stiffness_matrix(
+            element_dof_ids=domain.element_dof_ids,
+            element_densities=element_densities,
+            element_stiffness_matrix=K_e,
         )
 
-        K_free = K[free_dofs, :][:, free_dofs]
-        K_free = jnp.array(K[free_dofs, :][:, free_dofs])
+        K_free: NDArray = K[np.ix_(free_dofs, free_dofs)]
+        K_free = jnp.array(K_free)
 
         # Solve the system
         U_free = finite_element.solve_displacements(K_free, F[free_dofs])
@@ -166,7 +187,7 @@ def main() -> None:
         # # Y displacements
         # plot_values(U[1::2], domain.node_shape).show()
         # Total displacements
-        plot_values(np.linalg.norm([U[::2], U[1::2]], axis=0), domain.node_shape).show()
+        # plot_values(np.linalg.norm([U[::2], U[1::2]], axis=0), domain.node_shape).show()
 
         # Calculate the Energy of the Elements
         U_by_element = U[domain.element_dof_ids]
@@ -185,9 +206,12 @@ def main() -> None:
         # plot_values(node_volumes, domain.node_shape).show()
 
         # sensitivity_analysis()
-        design_variables = np.array(
-            [list(component.design_variables) for component in component_list]
-        ).flatten()
+        design_variables = np.expand_dims(
+            np.array(
+                [list(component.design_variables) for component in component_list]
+            ).flatten(),
+            1,
+        )
 
         # Objective and derivative
         objective = F.T @ U
@@ -197,9 +221,7 @@ def main() -> None:
 
         # Volume fraction constraint and derivative
         volume_fraction_constraint = (
-            np.sum(node_densities)
-            * np.prod(domain.element_size)
-            / np.prod(domain.dimensions)
+            np.sum(H) * np.prod(domain.element_size) / np.prod(domain.dimensions)
             - VOLUME_FRACTION
         )
         d_volume_fraction_d_design_vars = np.nansum(
@@ -218,13 +240,13 @@ def main() -> None:
         #     d_volume_fraction_d_design_vars, digit
         # )
 
-        d_objective_d_design_vars = d_objective_d_design_vars / np.max(
-            abs(d_objective_d_design_vars)
-        )
+        # d_objective_d_design_vars = d_objective_d_design_vars / np.max(
+        #     abs(d_objective_d_design_vars)
+        # )
 
-        d_volume_fraction_d_design_vars = d_volume_fraction_d_design_vars / np.max(
-            abs(d_volume_fraction_d_design_vars)
-        )
+        # d_volume_fraction_d_design_vars = d_volume_fraction_d_design_vars / np.max(
+        #     abs(d_volume_fraction_d_design_vars)
+        # )
 
         # update_design_variables()
         xmma, ymma, zmma, lam, xsi, eta, mu, zet, ss, low, upp = mma.mmasub(
@@ -232,7 +254,7 @@ def main() -> None:
             n=5 * len(component_list),
             iter=iteration + 1,
             # [x, y, angle, length, thickness]
-            xval=np.expand_dims(design_variables, 1),
+            xval=design_variables,
             xmin=design_variables_min,
             xmax=design_variables_max,
             xold1=design_variables_prev,
@@ -289,7 +311,7 @@ def initialise_components(n_x, n_y, domain: Domain2D) -> list[components.Compone
         region_size[1] / 2, domain.dimensions[1] - region_size[1] / 2, n_y
     )
 
-    angle: float = np.atan2(region_size[1], region_size[0])
+    angle: float = np.arctan2(region_size[1], region_size[0])
     length: float = np.linalg.norm(region_size)
 
     component_list: list[components.Component] = []
@@ -381,7 +403,12 @@ def heaviside(
 
 
 def plot_values(values: NDArray, domain_shape: tuple[int, int]) -> None:
-    return px.imshow(values.reshape(domain_shape, order="F").T, origin="lower")
+    # return px.imshow(values.reshape(domain_shape, order="F").T, origin="lower")
+    return go.Figure(
+        data=go.Contour(
+            z=values.reshape(domain_shape, order="F").T,
+        )
+    )
 
 
 if __name__ == "__main__":
