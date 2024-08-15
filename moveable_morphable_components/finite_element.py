@@ -1,6 +1,7 @@
 import jax.numpy as jnp
 import numpy as np
 from numpy.typing import NDArray
+import scipy
 
 
 def element_stiffness_matrix(
@@ -81,10 +82,10 @@ def assemble_stiffness_matrix(
     element_dof_ids: NDArray,
     element_densities: NDArray,
     element_stiffness_matrix: NDArray,
-) -> NDArray:
+):
     # Make the stiffness matrix
     num_dofs: int = np.max(element_dof_ids) + 1
-    stiffness_matrix: NDArray = np.zeros((num_dofs, num_dofs))
+    # stiffness_matrix: NDArray = np.zeros((num_dofs, num_dofs))
 
     # TODO vectorised way currently broken
     # K[
@@ -102,12 +103,27 @@ def assemble_stiffness_matrix(
 
     # return K
 
+    # for element, dof_ids in enumerate(element_dof_ids):
+    #     element_stiffness = (
+    #         element_stiffness_matrix * element_densities.flatten(order="F")[element]
+    #     )
+    #     stiffness_matrix[np.ix_(dof_ids, dof_ids)] += element_stiffness
+    # return stiffness_matrix
+
+    row = []
+    column = []
+    data = []
+    element_densities_flat = element_densities.flatten(order="F")
     for element, dof_ids in enumerate(element_dof_ids):
-        element_stiffness = (
-            element_stiffness_matrix * element_densities.flatten(order="F")[element]
-        )
-        stiffness_matrix[np.ix_(dof_ids, dof_ids)] += element_stiffness
-    return stiffness_matrix
+        element_stiffness = element_stiffness_matrix * element_densities_flat[element]
+        i, j = np.meshgrid(dof_ids, dof_ids)
+        row.extend(i.flatten())
+        column.extend(j.flatten())
+        data.extend(element_stiffness.flatten())
+        pass
+    return scipy.sparse.coo_matrix(
+        (data, (row, column)), shape=(num_dofs, num_dofs)
+    ).tocsc()
 
 
 def solve_displacements(K, F):

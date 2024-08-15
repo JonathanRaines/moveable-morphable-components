@@ -2,12 +2,14 @@ import itertools
 
 
 import numpy as np  # TODO: use jax.numpy fully
+from jax.experimental import sparse
 import jax.numpy as jnp
 from numpy.typing import NDArray
 
 import plotly.express as px
 import plotly.graph_objects as go
 import tqdm
+import scipy
 
 
 import components
@@ -50,9 +52,12 @@ def main() -> None:
     )
 
     # force vector [x1, y1, x2, y2, ...]
-    F = jnp.zeros(domain.num_dofs, dtype=jnp.float32)
+    # F = jnp.zeros(domain.num_dofs, dtype=jnp.float32)
     # F = F.at[loaded_dof_ids[1]].set(-1_000.0)  # Force in negative y direction (N)
-    F = F.at[loaded_dof_ids[0]].set(1_000.0)  # Force in negative y direction (N)
+    # F = F.at[loaded_dof_ids[0]].set(1_000.0)  # Tensile Force in positive x direction (N)
+    F = scipy.sparse.csc_array(
+        ([-1_000], ([loaded_dof_ids[1]], [0])), shape=(domain.num_dofs, 1)
+    )
 
     # Define the element stiffness matrix
     # This is independent of the components or domain
@@ -167,19 +172,24 @@ def main() -> None:
         element_densities: NDArray = domain.average_node_values_to_element(H)
 
         # Stiffness Matrix
-        K: NDArray = finite_element.assemble_stiffness_matrix(
+        K = finite_element.assemble_stiffness_matrix(
             element_dof_ids=domain.element_dof_ids,
             element_densities=element_densities,
             element_stiffness_matrix=K_e,
         )
 
-        K_free: NDArray = K[np.ix_(free_dofs, free_dofs)]
-        K_free = jnp.array(K_free)
+        # K_free: NDArray = K[np.ix_(free_dofs, free_dofs)]
+        # K_free = jnp.array(K_free)
+
+        # For sparse:
+        K_free = K[free_dofs, :][:, free_dofs]
 
         # Solve the system
-        U_free = finite_element.solve_displacements(K_free, F[free_dofs])
-        U: NDArray = jnp.zeros(domain.num_dofs, dtype=jnp.float32)
-        U = U.at[free_dofs].set(U_free)
+        # U_free = finite_element.solve_displacements(K_free, F[free_dofs])
+        # U: NDArray = jnp.zeros(domain.num_dofs, dtype=jnp.float32)
+        # U = U.at[free_dofs].set(U_free)
+        U: NDArray = np.zeros(domain.num_dofs)
+        U[free_dofs] = scipy.sparse.linalg.spsolve(K_free, F[free_dofs])
 
         # # Visualise the result TODO debug
         # # X displacements
