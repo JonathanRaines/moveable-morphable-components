@@ -121,7 +121,7 @@ def assemble_stiffness_matrix(
         column.extend(j.flatten())
         data.extend(element_stiffness.flatten())
         pass
-    return scipy.sparse.coo_matrix(
+    return scipy.sparse.coo_array(
         (data, (row, column)), shape=(num_dofs, num_dofs)
     ).tocsc()
 
