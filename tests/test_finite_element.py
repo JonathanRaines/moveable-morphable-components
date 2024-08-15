@@ -34,13 +34,13 @@ def test_deflection(d):
 
     E = 1e7
     t = 1.0
-    K_e: NDArray = finite_element.make_stiffness_matrix(
-        E, ν=0.3, element_size=d.element_size, t=t
+    K_e: NDArray = finite_element.element_stiffness_matrix(
+        E, poissons_ratio=0.3, element_size=d.element_size, element_thickness=t
     )
 
     element_densities = jnp.ones(d.num_elements, dtype=jnp.float32)
 
-    K = finite_element.stiffness_matrix(
+    K = finite_element.assemble_stiffness_matrix(
         d.element_dof_ids,
         element_densities * E,
         K_e,
@@ -79,13 +79,13 @@ def test_extension(d):
 
     E = 1e7
     t = 1.0
-    K_e: NDArray = finite_element.make_stiffness_matrix(
-        E, ν=0.3, element_size=d.element_size, t=t
+    K_e: NDArray = finite_element.element_stiffness_matrix(
+        E, poissons_ratio=0.3, element_size=d.element_size, element_thickness=t
     )
 
     element_densities = jnp.ones(d.num_elements, dtype=jnp.float32)
 
-    K = finite_element.stiffness_matrix(
+    K = finite_element.assemble_stiffness_matrix(
         d.element_dof_ids,
         element_densities * E,
         K_e,
