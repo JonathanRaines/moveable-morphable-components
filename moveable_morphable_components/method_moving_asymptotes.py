@@ -109,9 +109,12 @@ def mmasub(
             - upp (np.ndarray): Updated upper bounds for the design variables.
     """
 
-    epsimin = 0.0000001
-    raa0 = 0.00001
-    albefa = 0.1
+    # epsimin = 0.0000001
+    epsimin = 1e-9
+    # raa0 = 0.00001
+    raa0 = 0.1
+    # albefa = 0.1
+    albefa = 0.95
     asyinit = 0.5
     asyincr = 1.2
     asydecr = 0.7

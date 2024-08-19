@@ -89,24 +89,26 @@ class Domain2D:
             -1,
         ).reshape(-1, 8)
 
-        self.node_volumes = (
-            self.element_value_to_nodes(np.ones(self.element_shape)).flatten(order="F")
-            * np.prod(self.element_size)
-            / np.prod(self.dimensions)
+        self.node_volumes = self.element_value_to_nodes(
+            np.full(self.element_shape, np.prod(self.dimensions / self.element_shape))
         )
 
-    # TODO currently (y, x) as the way product generates it.
-    @property
-    def node_coordinates(self) -> Generator[tuple[float, float], None, None]:
-        return itertools.product(
-            np.linspace(0, self.dimensions[1], self.node_shape[1]),
+        self.node_coordinates = np.meshgrid(
             np.linspace(0, self.dimensions[0], self.node_shape[0]),
+            np.linspace(0, self.dimensions[1], self.node_shape[1]),
+            indexing="ij",
         )
 
-    def map_node_xy_to_id(self, point: tuple[int, int]) -> int:
+    def node_xys_to_ids(self, point: tuple[int, int]) -> int:
         return np.ravel_multi_index(point, self.node_shape, order="F")
 
-    def select_node_with_point(self, point: tuple[float, float]) -> NDArray:
+    def dof_ids_to_coords(self, dof_ids: NDArray) -> NDArray:
+        node_indices = np.unique(dof_ids // 2)
+        node_xy = np.array(np.unravel_index(node_indices, self.node_shape, order="F")).T
+        node_coords = node_xy / self.node_shape * self.dimensions
+        return node_coords
+
+    def coord_to_nearest_node(self, point: tuple[float, float]) -> NDArray:
         """
         Selects the node corresponding to the point in the domain
 
@@ -118,9 +120,9 @@ class Domain2D:
         """
         # Find the closes x, y node index by dividing by the element size and rounding
         node_xy = np.rint(point / self.element_size).astype(np.int32)
-        return self.map_node_xy_to_id(node_xy)
+        return self.node_xys_to_ids(node_xy)
 
-    def select_dofs_with_point(self, point: tuple[float, float]) -> NDArray:
+    def coords_to_nearest_dof_ids(self, point: tuple[float, float]) -> NDArray:
         """
         Selects the degrees of freedom corresponding to the point in the domain
 
@@ -134,10 +136,10 @@ class Domain2D:
             point[0] <= self.dimensions[0] and point[1] <= self.dimensions[1]
         ), "Point is outside the domain"
         assert point[0] >= 0 and point[1] >= 0, "Point is outside the domain"
-        selected_node_id = self.select_node_with_point(point)
+        selected_node_id = self.coord_to_nearest_node(point)
         return np.array([selected_node_id * 2, selected_node_id * 2 + 1])
 
-    def select_dofs_on_left_boundary(self):
+    def left_boundary_dof_ids(self):
         node_ids: NDArray = np.arange(self.num_nodes, step=self.node_shape[0])
         return np.concatenate([node_ids * 2, node_ids * 2 + 1])
 
@@ -192,6 +194,6 @@ class Domain2D:
 
 if __name__ == "__main__":
     d = Domain2D(dimensions=(2.0, 1.0), element_shape=(20, 10))
-    a = d.select_dofs_with_point((2.0, 1.0))
+    a = d.coords_to_nearest_dof_ids((2.0, 1.0))
     d = Domain2D(dimensions=(5.0, 1.0), element_shape=(5, 1))
-    a = d.select_dofs_with_point((5.0, 0.5))
+    a = d.coords_to_nearest_dof_ids((5.0, 0.5))
