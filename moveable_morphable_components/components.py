@@ -126,9 +126,7 @@ class UniformBeam(Component):
             ]
         )
 
-        φ: NDArray = 1 - jnp.maximum(
-            jnp.abs(_x) - length / 2, jnp.abs(_y) - thickness / 2
-        )
+        φ: NDArray = -jnp.maximum(jnp.abs(_x) - length / 2, jnp.abs(_y) - thickness / 2)
         return φ
 
     def __repr__(self) -> str:
@@ -183,7 +181,7 @@ class UniformBeamFixedThickness(Component):
             ]
         )
 
-        φ: NDArray = 1 - jnp.maximum(
+        φ: NDArray = -jnp.maximum(
             jnp.abs(_x) - length / 2, jnp.abs(_y) - self.thickness / 2
         )
         return φ
