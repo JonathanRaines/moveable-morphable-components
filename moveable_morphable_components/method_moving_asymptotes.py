@@ -110,14 +110,17 @@ def mmasub(
     """
 
     # epsimin = 0.0000001
-    epsimin = 1e-9
+    epsimin = 1e-10
     # raa0 = 0.00001
-    raa0 = 0.1
+    raa0 = 0.01
     # albefa = 0.1
-    albefa = 0.95
-    asyinit = 0.5
-    asyincr = 1.2
-    asydecr = 0.7
+    albefa = 0.4
+    # asyinit = 0.5
+    asyinit = 0.05
+    # asyincr = 1.2
+    asyincr = 0.8
+    # asydecr = 0.7
+    asydecr = 0.6
     eeen = np.ones((n, 1), dtype=float)
     eeem = np.ones((m, 1), dtype=float)
     zeron = np.zeros((n, 1), dtype=float)

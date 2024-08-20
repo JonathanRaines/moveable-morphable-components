@@ -20,29 +20,29 @@ import warnings
 
 warnings.filterwarnings("error")
 
-E: float = 1e7  # 1e7  # Young's modulus N/mm^2
-α: float = 1e-3  # Heaviside minimum value
-ε: float = 10  # Size of transition region for the smoothed Heaviside function
+E: float = 1e1  # 1e7  # Young's modulus N/mm^2
+α: float = 1e-9  # 1e-3  # Heaviside minimum value
+ε: float = 0.01  # 10  # Size of transition region for the smoothed Heaviside function
 ν: float = 0.3  # Poisson's ratio
 t: float = 1.0  # Thickness
-FORCE_MAGNITUDE: float = 100  #  N
+FORCE_MAGNITUDE: float = 1  #  N
 
+SCALE: float = 1.0
 NUM_CONSTRAINTS: int = 1  # Volume fraction constraint
-# A0: float = 1.0
-A0: float = 0.01
+A0: float = 1.0
+# A0: float = 0.01
 A: NDArray = np.full((NUM_CONSTRAINTS, 1), 0)
-C: NDArray = np.full((NUM_CONSTRAINTS, 1), 1)
-D: NDArray = np.full((NUM_CONSTRAINTS, 1), 0)
-MOVE = 0.5
-OBJECTIVE_TOLERANCE: float = 1e-3
-CONSTRAINT_TOLERANCE: float = 1e-2
+C: NDArray = np.full((NUM_CONSTRAINTS, 1), 1000)
+D: NDArray = np.full((NUM_CONSTRAINTS, 1), 1)
+MOVE = 1.0  # Proportion of the design variable range that can be moved in a single iteration
+OBJECTIVE_TOLERANCE: float = 1e-2 * SCALE  # within a 1% change
 
 MAX_ITERATIONS: int = 100
-VOLUME_FRACTION: float = 0.1
+VOLUME_FRACTION: float = 0.4
 
 
 def main() -> None:
-    domain: Domain2D = Domain2D(dimensions=(200.0, 100.0), element_shape=(80, 40))
+    domain: Domain2D = Domain2D(dimensions=(2.0, 1.0), element_shape=(80, 40))
 
     # Fix the left hand side in place
     fixed_dof_ids: NDArray[np.uint] = domain.left_boundary_dof_ids()
@@ -69,9 +69,7 @@ def main() -> None:
 
     # Generate the initial components
     component_list: list[components.Component] = layout_grid_of_uniform_beams(
-        n_x=4,
-        n_y=2,
-        dimensions=domain.dimensions,
+        n_x=4, n_y=2, dimensions=domain.dimensions, thickness=0.1
     )
 
     # Define the initial values for the design variables
@@ -118,13 +116,6 @@ def main() -> None:
         component_φs: NDArray[float] = evaluate_signed_distance_functions(
             component_list=component_list, coordinates=domain.node_coordinates
         )
-        # debug_component = 4
-        # plot_values(component_φs[debug_component], domain.node_shape).show()
-        # for i in range(5):
-        #     plot_values(
-        #         component_list[debug_component].φ_grad(domain.node_coordinates)[i],
-        #         domain.node_shape,
-        #     ).show()
 
         # component_connectivity: NDArray[bool] = connected_components(component_φs)
 
@@ -166,6 +157,7 @@ def main() -> None:
         #         upp = upp.reshape(-1, 5)[list(components_in_load_path)].reshape(-1, 1)
 
         φ, dφ_dφs = combine_φs(signed_distance_functions=component_φs)
+
         # dφ_dφs is the derivative of the global level set function with respect to the component level set functions
         # It is 1 where the component is the maximum and 0 elsewhere
         # plot_values(φ, domain.node_shape).show()
@@ -238,7 +230,7 @@ def main() -> None:
         )
 
         # Objective and derivative
-        objective: NDArray[float] = F.T @ U
+        objective: NDArray[float] = F.T @ U * SCALE
         objective_history.append(objective[0])
         d_objective_d_design_vars = -node_energy * dH_dφ * dφ_d_design_vars
         d_objective_d_design_vars = np.nansum(
@@ -254,10 +246,17 @@ def main() -> None:
             / np.sum(domain.node_volumes)
             - VOLUME_FRACTION
         )
-        constraint_history.append(volume_fraction_constraint)
         d_volume_fraction_d_design_vars: NDArray[float] = (
             domain.node_volumes * dH_dφ * dφ_d_design_vars
         )
+        ## Enable to make the volume fraction a target rather than upper limit
+        # d_volume_fraction_d_design_vars *= volume_fraction_constraint // np.abs(
+        #     volume_fraction_constraint
+        # )  # flip the sign of the derivative
+        # volume_fraction_constraint = (
+        #     np.abs(volume_fraction_constraint) - 0.1
+        # )  # make within 10% of target
+        constraint_history.append(volume_fraction_constraint)
 
         d_volume_fraction_d_design_vars = np.nansum(
             d_volume_fraction_d_design_vars.reshape(
@@ -274,7 +273,7 @@ def main() -> None:
         #         )
         #     )
         # )
-        # d_objective_d_design_vars /= 100_000
+        d_objective_d_design_vars *= SCALE
         # d_volume_fraction_d_design_vars /= 200_000
 
         # Update design variables
@@ -329,8 +328,7 @@ def main() -> None:
             iteration=iteration,
             objective_tolerance=OBJECTIVE_TOLERANCE,
             objective_history=objective_history,
-            constraint_tolerance=CONSTRAINT_TOLERANCE,
-            constraint_error=volume_fraction_constraint / VOLUME_FRACTION,
+            constraint_value=volume_fraction_constraint,
             window_size=5,
         ):
             print("Converged")
@@ -344,7 +342,7 @@ def main() -> None:
 
 
 def layout_grid_of_uniform_beams(
-    n_x: int, n_y: int, dimensions: tuple[float, float], thickness: float = 0.1
+    n_x: int, n_y: int, dimensions: tuple[float, float], thickness: float
 ) -> list[components.Component]:
     """Initialises a grid of crossed Uniform Beams in the domain
 
@@ -380,7 +378,7 @@ def layout_grid_of_uniform_beams(
                     center=components.Point2D(x, y),
                     angle=sign * angle,
                     length=length,
-                    thickness=5.0,
+                    thickness=thickness,
                 )
             )
 
@@ -422,11 +420,10 @@ def is_converged(
     iteration,
     objective_tolerance,
     objective_history,
-    constraint_tolerance,
-    constraint_error,
+    constraint_value,
     window_size,
 ) -> bool:
-    if iteration > window_size and constraint_error < constraint_tolerance:
+    if iteration > window_size and constraint_value < 0:
         smoothed_objective_change: NDArray = moving_average(
             objective_history, window_size
         )
@@ -566,7 +563,7 @@ if __name__ == "__main__":
             x=np.arange(len(constraint)),
             y=constraint,
             mode="lines",
-            name="Volume Fraction",
+            name="Volume Fraction Error",
         ),
         secondary_y=True,
     )
