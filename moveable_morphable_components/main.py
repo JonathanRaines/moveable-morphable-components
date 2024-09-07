@@ -1,24 +1,19 @@
 import itertools
-from typing import Callable
 
-import jax.numpy as jnp
-import networkx as nx
 import numpy as np  # TODO: use jax.numpy fully
-from numpy.typing import NDArray
 import plotly.graph_objects as go
-from plotly.subplots import make_subplots
+import scipy
 import scipy.sparse
 import tqdm
-import scipy
+from numpy.typing import NDArray
 
-import components
-from domain import Domain2D
-import finite_element
-import method_moving_asymptotes as mma
+from moveable_morphable_components import components, finite_element
+from moveable_morphable_components import method_moving_asymptotes as mma
+from moveable_morphable_components.domain import Domain2D
 
-import warnings
+# import warnings
 
-warnings.filterwarnings("error")
+# warnings.filterwarnings("error")
 
 E: float = 1e1  # 1e7  # Young's modulus N/mm^2
 α: float = 1e-9  # 1e-3  # Heaviside minimum value
@@ -30,22 +25,24 @@ FORCE_MAGNITUDE: float = 1  #  N
 SCALE: float = 1.0
 NUM_CONSTRAINTS: int = 1  # Volume fraction constraint
 A0: float = 1.0
-# A0: float = 0.01
 A: NDArray = np.full((NUM_CONSTRAINTS, 1), 0)
 C: NDArray = np.full((NUM_CONSTRAINTS, 1), 1000)
 D: NDArray = np.full((NUM_CONSTRAINTS, 1), 1)
 MOVE = 1.0  # Proportion of the design variable range that can be moved in a single iteration
 OBJECTIVE_TOLERANCE: float = 1e-2 * SCALE  # within a 1% change
 
-MAX_ITERATIONS: int = 100
-VOLUME_FRACTION: float = 0.4
 
-
-def main() -> None:
-    domain: Domain2D = Domain2D(dimensions=(2.0, 1.0), element_shape=(80, 40))
-
+def main(
+    max_iterations: int,
+    domain: Domain2D,
+    boundary_conditions: dict,
+    volume_fraction_limit: float,
+    component_list: list[components.Component],
+    design_variables_min: NDArray[float],
+    design_variables_max: NDArray[float],
+) -> None:
     # Fix the left hand side in place
-    fixed_dof_ids: NDArray[np.uint] = domain.left_boundary_dof_ids()
+    fixed_dof_ids: NDArray[np.uint] = boundary_conditions["fixed_dof_ids"]
 
     # Make a mask for the free dofs
     free_dofs: NDArray[np.uint] = np.setdiff1d(
@@ -53,23 +50,18 @@ def main() -> None:
     )
 
     # Load the beam on the RHS half way up
-    loaded_dof_ids: NDArray[np.uint] = domain.coords_to_nearest_dof_ids(
-        point=(domain.dimensions[0], domain.dimensions[1] / 2)
-    )
+    loaded_dof_ids: NDArray[np.uint] = boundary_conditions["loaded_dof_ids"]
+    load_magnitudes = boundary_conditions["load_magnitudes"]
 
     # sparse force vector [x1, y1, x2, y2, ...]
     F = scipy.sparse.csc_array(
-        ([-FORCE_MAGNITUDE], ([loaded_dof_ids[1]], [0])), shape=(domain.num_dofs, 1)
+        (load_magnitudes, (loaded_dof_ids, np.zeros_like(loaded_dof_ids))),
+        shape=(domain.num_dofs, 1),
     )
 
     # Define the element stiffness matrix
     K_e: NDArray[float] = finite_element.element_stiffness_matrix(
         E, ν, domain.element_size, t
-    )
-
-    # Generate the initial components
-    component_list: list[components.Component] = layout_grid_of_uniform_beams(
-        n_x=4, n_y=2, dimensions=domain.dimensions, thickness=0.1
     )
 
     # Define the initial values for the design variables
@@ -80,19 +72,11 @@ def main() -> None:
         axis=1,
     )
 
-    # Set the bounds for the design variables
-    design_variables_min: NDArray[float] = np.array((0.0, 0.0, -np.pi / 2, 0.0, -4 * ε))
+    num_design_variables: int = len(design_variables_min)
+
+    # Set the bounds for the design variables TODO: assumes all the same component
     design_variables_min: NDArray[float] = np.expand_dims(
         np.tile(design_variables_min, len(component_list)), axis=1
-    )
-    design_variables_max: NDArray[float] = np.array(
-        (
-            domain.dimensions[0],
-            domain.dimensions[1],
-            np.pi / 2,
-            np.linalg.norm(domain.dimensions) / 2,
-            np.min(domain.dimensions) / 2,
-        )
     )
     design_variables_max: NDArray[float] = np.expand_dims(
         np.tile(design_variables_max, len(component_list)), axis=1
@@ -105,62 +89,20 @@ def main() -> None:
     low: NDArray[float] = design_variables_min
     upp: NDArray[float] = design_variables_max
 
-    H_history: NDArray = np.zeros((*domain.node_shape, MAX_ITERATIONS))
-    design_variable_history = np.zeros((design_variables.shape[0], MAX_ITERATIONS))
+    H_history: NDArray = np.zeros((*domain.node_shape, max_iterations))
     objective_history: list[float] = []
     constraint_history: list[float] = []
 
     # Optimisation loop
-    for iteration in tqdm.trange(MAX_ITERATIONS):
+    for iteration in tqdm.trange(max_iterations):
         # Combine the level set functions from the components to form a global one
         component_φs: NDArray[float] = evaluate_signed_distance_functions(
             component_list=component_list, coordinates=domain.node_coordinates
         )
 
-        # component_connectivity: NDArray[bool] = connected_components(component_φs)
-
-        # load_coordinates: NDArray = domain.dof_ids_to_coords(loaded_dof_ids)
-        # ground_coordinates: NDArray = domain.dof_ids_to_coords(fixed_dof_ids)
-        # components_touching_load: list[int] = point_is_in_component(
-        #     signed_distance_functions=component_list, points=load_coordinates
-        # )
-        # components_touching_ground: list[int] = point_is_in_component(
-        #     signed_distance_functions=component_list, points=ground_coordinates
-        # )
-        # component_graph = nx.from_numpy_array(component_connectivity)
-        # component_islands = nx.connected_components(component_graph)
-
-        # islands_in_load_path: list[set[int]] = [
-        #     isle
-        #     for isle in component_islands
-        #     if any(np.intersect1d(list(isle), components_touching_load))
-        #     and any(np.intersect1d(list(isle), components_touching_ground))
-        # ]
-
-        load_path_exists: bool = False
-        # if len(islands_in_load_path) != 0:
-        #     load_path_exists = True
-
-        #     components_in_load_path: set[int] = set.union(*islands_in_load_path)500
-        #             list(components_in_load_path)
-        #         ].reshape(-1, 1)
-        #         design_variables_prev_2 = design_variables_prev_2.reshape(-1, 5)[
-        #             list(components_in_load_path)
-        #         ].reshape(-1, 1)
-        #         design_variables_min = design_variables_min.reshape(-1, 5)[
-        #             list(components_in_load_path)
-        #         ].reshape(-1, 1)
-        #         design_variables_max = design_variables_max.reshape(-1, 5)[
-        #             list(components_in_load_path)
-        #         ].reshape(-1, 1)
-        #         low = low.reshape(-1, 5)[list(components_in_load_path)].reshape(-1, 1)
-        #         upp = upp.reshape(-1, 5)[list(components_in_load_path)].reshape(-1, 1)
-
         φ, dφ_dφs = combine_φs(signed_distance_functions=component_φs)
-
         # dφ_dφs is the derivative of the global level set function with respect to the component level set functions
         # It is 1 where the component is the maximum and 0 elsewhere
-        # plot_values(φ, domain.node_shape).show()
 
         # H is Heaviside(φ), it is used to modify the Young's modulus (E) of the elements
         H: NDArray[float] = heaviside(φ, transition_width=ε, minimum_value=α)
@@ -170,17 +112,14 @@ def main() -> None:
         # TODO: Replace with automatic differentiation?
         dH_dφ: NDArray[float] = 3 * (1 - α) / (4 * ε) * (1 - φ**2 / ε**2)
         dH_dφ = np.where(abs(φ) > ε, 0.0, dH_dφ)
-        # plot_values(dH_dφ, domain.node_shape).show()
 
         # Calculate the derivative of φ with respect to the design variables
         dφ_component_d_design_vars: NDArray[float] = np.concatenate(
             [comp.φ_grad(domain.node_coordinates) for comp in component_list]
         )
-        # TODO hard coded value 5
+        # TODO assumes same number of design var per component
         dφ_d_design_vars: NDArray[float] = (
-            np.repeat(dφ_dφs, 5, axis=0) * dφ_component_d_design_vars
-            # .reshape(dφ_component_d_design_vars.shape[0], -1)
-            # .sum(axis=1)
+            np.repeat(dφ_dφs, num_design_variables, axis=0) * dφ_component_d_design_vars
         )
 
         # Calculate the density of the elements
@@ -192,16 +131,6 @@ def main() -> None:
             element_densities=element_densities,
             element_stiffness_matrix=K_e,
         )
-
-        # If the load path exists, downselect the free dofs to only those
-        # that related to elements that intersect the structure
-        if load_path_exists:
-            unused_dof_xys = np.argwhere(element_densities <= α)
-            unused_dof_ids = np.ravel_multi_index(
-                unused_dof_xys.T, domain.node_shape, order="F"
-            )
-            free_dofs = np.setdiff1d(free_dofs, unused_dof_ids)
-            pass
 
         # Reduce the stiffness matrix to the free dofs
         K_free: scipy.sparse.csc_matrix = K[free_dofs, :][:, free_dofs]
@@ -217,9 +146,7 @@ def main() -> None:
             axis=1,
         ).reshape(domain.element_shape, order="F")
 
-        node_energy: NDArray[float] = domain.element_value_to_nodes(
-            element_energy
-        )  # .flatten(order="F")
+        node_energy: NDArray[float] = domain.element_value_to_nodes(element_energy)
 
         # Sensitivity_analysis()
         design_variables: NDArray[float] = np.expand_dims(
@@ -244,7 +171,7 @@ def main() -> None:
                 heaviside(φ, transition_width=ε, minimum_value=0) * domain.node_volumes
             )
             / np.sum(domain.node_volumes)
-            - VOLUME_FRACTION
+            - volume_fraction_limit
         )
         d_volume_fraction_d_design_vars: NDArray[float] = (
             domain.node_volumes * dH_dφ * dφ_d_design_vars
@@ -265,21 +192,12 @@ def main() -> None:
             axis=1,
         )
 
-        # Normalise the derivatives
-        # scale_factor: float = np.max(
-        #     np.abs(
-        #         np.concatenate(
-        #             [d_objective_d_design_vars, d_volume_fraction_d_design_vars]
-        #         )
-        #     )
-        # )
         d_objective_d_design_vars *= SCALE
-        # d_volume_fraction_d_design_vars /= 200_000
 
         # Update design variables
         xmma, ymma, zmma, lam, xsi, eta, mu, zet, ss, low, upp = mma.mmasub(
             m=1,
-            n=5 * len(component_list),
+            n=num_design_variables * len(component_list),
             iter=iteration + 1,
             # [x, y, angle, length, thickness]
             xval=design_variables,
@@ -301,7 +219,7 @@ def main() -> None:
         )
 
         # Update the components
-        new_design_variables: NDArray = xmma.copy().reshape(-1, 5)
+        new_design_variables: NDArray = xmma.copy().reshape(-1, num_design_variables)
         keep_mask = np.ones_like(new_design_variables, dtype=bool)
         keep_mask[new_design_variables[:, -1] < -ε, :] = False
         keep_mask = keep_mask.reshape(-1)
@@ -314,15 +232,33 @@ def main() -> None:
         low = low[keep_mask]
         upp = upp[keep_mask]
 
+        # TODO separate fixed and free variables.
+        # -------------------
+        # component_list: list[components.Component] = [
+        #     components.UniformBeam(
+        #         center=components.Point2D(x, y),
+        #         angle=angle,
+        #         length=length,
+        #         thickness=thickness,
+        #     )
+        #     for x, y, angle, length, thickness in design_variables.reshape(
+        #         -1, num_design_variables
+        #     )
+        # ]
+        # -------------------
+        thicknesses = [c.thickness for c in component_list]
         component_list: list[components.Component] = [
-            components.UniformBeam(
+            components.UniformBeamFixedThickness(
                 center=components.Point2D(x, y),
                 angle=angle,
                 length=length,
-                thickness=thickness,
+                thickness=thicknesses[i],
             )
-            for x, y, angle, length, thickness in design_variables.reshape(-1, 5)
+            for i, (x, y, angle, length) in enumerate(
+                design_variables.reshape(-1, num_design_variables)
+            )
         ]
+        # -------------------
 
         if is_converged(
             iteration=iteration,
@@ -335,54 +271,11 @@ def main() -> None:
             break
 
     return (
+        component_list,
         H_history[:, :, :iteration],
         objective_history[:iteration],
         constraint_history[:iteration],
     )
-
-
-def layout_grid_of_uniform_beams(
-    n_x: int, n_y: int, dimensions: tuple[float, float], thickness: float
-) -> list[components.Component]:
-    """Initialises a grid of crossed Uniform Beams in the domain
-
-    Parameters:
-        n_x: int - The number of component pairs (crosses) in the x direction
-        n_y: int - The number of component pairs (crosses) in the y direction
-        dimensions: tuple[float, float] - The dimensions to fill with the grid
-        thickness: float - The thickness of the beam components
-
-    Returns:
-        list[Component] - The list of components
-    """
-    # Work out the size of the regions each crossed pair will occupy
-    region_size: NDArray = dimensions / (n_x, n_y)
-
-    # Generate the center coordinates of regions
-    x_coords: NDArray = np.linspace(
-        region_size[0] / 2, dimensions[0] - region_size[0] / 2, n_x
-    )
-    y_coords: NDArray = np.linspace(
-        region_size[1] / 2, dimensions[1] - region_size[1] / 2, n_y
-    )
-
-    # Angle and length to put the components across the region diagonals
-    angle: float = np.arctan2(region_size[1], region_size[0])
-    length: float = np.linalg.norm(region_size)
-
-    component_list: list[components.Component] = []
-    for y, x in itertools.product(y_coords, x_coords):
-        for sign in [-1, 1]:
-            component_list.append(
-                components.UniformBeam(
-                    center=components.Point2D(x, y),
-                    angle=sign * angle,
-                    length=length,
-                    thickness=thickness,
-                )
-            )
-
-    return component_list
 
 
 def evaluate_signed_distance_functions(
@@ -517,55 +410,3 @@ def point_is_in_component(
         )
         components_touching_point.update(np.argwhere(signed_distances > 0).flatten())
     return list(components_touching_point)
-
-
-if __name__ == "__main__":
-    steps, objective, constraint = main()
-    steps_downsampled = steps[:, :, ::1]
-    objective_downsampled = objective[::1]
-    duration = 5_000  # ms
-    frame_duration = duration // steps_downsampled.shape[2]
-    fig = go.Figure(
-        data=[go.Contour(z=steps_downsampled[:, :, 0].T)],
-        layout=go.Layout(
-            title="MMC",
-            updatemenus=[
-                dict(
-                    type="buttons",
-                    buttons=[
-                        dict(
-                            label="Play",
-                            method="animate",
-                            args=[None, {"frame": {"duration": frame_duration}}],
-                        )
-                    ],
-                )
-            ],
-            width=1_600,
-            height=800,
-        ),
-        frames=[
-            go.Frame(data=[go.Contour(z=steps_downsampled[:, :, i].T)])
-            for i in range(steps_downsampled.shape[2])
-        ],
-    )
-    fig.show()
-
-    obj_fig = make_subplots(specs=[[{"secondary_y": True}]])
-    obj_fig.add_trace(
-        go.Scatter(
-            x=np.arange(len(constraint)), y=objective, mode="lines", name="Objective"
-        ),
-        secondary_y=False,
-    )
-    obj_fig.add_trace(
-        go.Scatter(
-            x=np.arange(len(constraint)),
-            y=constraint,
-            mode="lines",
-            name="Volume Fraction Error",
-        ),
-        secondary_y=True,
-    )
-    obj_fig.update_layout(title="Objective", template="simple_white")
-    obj_fig.show()
