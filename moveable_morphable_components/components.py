@@ -1,42 +1,74 @@
-from dataclasses import dataclass
-from typing import Callable
 from functools import partial
+from typing import Callable, NamedTuple
 
 import jax
 import jax.numpy as jnp
 import numpy as np
 from numpy.typing import NDArray
-import plotly.express as px
 
 
-@dataclass(frozen=True)
-class Point2D:
-    x: float
-    y: float
+class Point2D(NamedTuple):
+    x: float | jnp.ndarray
+    y: float | jnp.ndarray
 
-    def __repr__(self) -> str:
-        return f"({self.x}, {self.y})"
+
+class CircleSpec(NamedTuple):
+    center: Point2D
+    radius: float | jnp.ndarray
 
 
 def circle(
-    x: float, y: float, center_x: float, center_y: float, radius: float
-) -> tuple[Callable, Callable]:
-    assert all([isinstance(i, float) for i in [x, y, center_x, center_y, radius]])
+    point: Point2D,
+) -> tuple[
+    Callable[[CircleSpec], float | jnp.ndarray],
+    Callable[[CircleSpec], float | jnp.ndarray],
+]:
+    """Create a topological description function for a circle."""
 
-    def phi(center_x, center_y, radius, x, y):
-        return radius**2 - (x - center_x) ** 2 - (y - center_y) ** 2
+    def φ(spec: CircleSpec) -> float | jnp.ndarray:
+        """Topological Description Function for a circle."""
+        return (
+            spec.radius**2
+            - (point.x - spec.center.x) ** 2
+            - (point.y - spec.center.y) ** 2
+        )
 
-    phi_grad = jax.grad(phi, argnums=(0, 1, 2))
+    J = jax.jacobian(φ)
 
-    return (
-        partial(phi, center_x, center_y, radius),
-        partial(
-            phi_grad,
-            center_x,
-            center_y,
-            radius,
-        ),
-    )
+    return φ, J
+
+
+class BeamSpec(NamedTuple):
+    center: Point2D
+    angle: float | jnp.ndarray
+    length: float | jnp.ndarray
+    thickness: float | jnp.ndarray
+
+
+def uniform_beam(point: Point2D) -> tuple[Callable, Callable]:
+    def φ(spec: BeamSpec) -> float | jnp.ndarray:
+        """Topological Description Function for a circle."""
+        center, angle, length, thickness = spec
+        # because the matrix gets flipped top to bottom
+        rotation_matrix: NDArray = jnp.array(
+            [
+                [jnp.cos(angle), jnp.sin(angle)],
+                [-jnp.sin(angle), jnp.cos(angle)],
+            ]
+        )
+        # Local coordinates
+        _x, _y = rotation_matrix @ jnp.stack(
+            [
+                (point.x - center.x),
+                (point.y - center.y),
+            ]
+        )
+
+        return -jnp.maximum(jnp.abs(_x) - length / 2, jnp.abs(_y) - thickness / 2)
+
+    J = jax.jacobian(φ)
+
+    return φ, J
 
 
 class Component:
@@ -114,8 +146,8 @@ class UniformBeam(Component):
         # -angle because the matrix gets flipped top to bottom
         rotation_matrix: NDArray = jnp.array(
             [
-                [jnp.cos(-angle), -jnp.sin(-angle)],
-                [jnp.sin(-angle), jnp.cos(-angle)],
+                [jnp.cos(angle), jnp.sin(angle)],
+                [-jnp.sin(angle), jnp.cos(angle)],
             ]
         )
         # Local coordinates
@@ -152,10 +184,10 @@ class UniformBeamFixedThickness(Component):
         self.length = length
         self.thickness = thickness
 
-        # Override the design variables to exclude the thickness
-        @property
-        def design_variables(self) -> list[float]:
-            return [float(v) for v in [self.x, self.y, self.angle, self.length]]
+    # Override the design variables to exclude the thickness
+    @Component.design_variables.getter
+    def design_variables(self) -> list[float]:
+        return [float(v) for v in [self.x, self.y, self.angle, self.length]]
 
     def _φ(
         self,
