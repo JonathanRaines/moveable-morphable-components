@@ -117,7 +117,7 @@ def random_beams(
 
     design_vars = np.random.uniform(low=min, high=max, size=(n, 5))
     for i in range(n):
-        x, y, angle, length, thickness = design_vars[i] * (max - min) + min
+        x, y, angle, length, thickness = design_vars[i]
         component_list.append(
             components.UniformBeam(
                 center=components.Point2D(x, y),
