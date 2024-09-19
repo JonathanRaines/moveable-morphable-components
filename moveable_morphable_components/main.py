@@ -90,6 +90,7 @@ def main(
     upp: NDArray[float] = design_variables_max
 
     H_history: NDArray = np.zeros((*domain.node_shape, max_iterations))
+    component_list_history = [component_list]
     objective_history: list[float] = []
     constraint_history: list[float] = []
 
@@ -259,7 +260,7 @@ def main(
             )
         ]
         # -------------------
-
+        component_list_history.append(component_list)
         if is_converged(
             iteration=iteration,
             objective_tolerance=OBJECTIVE_TOLERANCE,
@@ -271,7 +272,7 @@ def main(
             break
 
     return (
-        component_list,
+        component_list_history,
         H_history[:, :, :iteration],
         objective_history[:iteration],
         constraint_history[:iteration],
