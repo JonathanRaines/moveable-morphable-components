@@ -16,6 +16,7 @@ jax = { extras = ["cuda12"], version = "^0.4.31" }
 tqdm = "^4.66.5"
 networkx = "^3.3"
 optax = "^0.2.3"
+pillow = "^10.4.0"
 
 
 [tool.poetry.group.dev.dependencies]
