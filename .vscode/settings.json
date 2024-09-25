@@ -1,5 +1,22 @@
 {
     "cSpell.words": [
-        "dtype"
+        "arange",
+        "argnums",
+        "argwhere",
+        "dofs",
+        "dtype",
+        "Heaviside",
+        "linalg",
+        "morphable",
+        "nansum",
+        "ndarray",
+        "setdiff",
+        "spsolve",
+        "tdfs",
+        "trange",
+        "vmap",
+        "xmma",
+        "ymma",
+        "zmma"
     ]
 }
