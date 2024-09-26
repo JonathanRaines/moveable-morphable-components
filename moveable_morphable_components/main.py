@@ -1,26 +1,36 @@
-import itertools
+"""The main loop of the MMC method."""
+from __future__ import annotations
 
-import numpy as np  # TODO: use jax.numpy fully
+import itertools
+from typing import TYPE_CHECKING
+
+import jax
+import jax.numpy as jnp
+import numpy as np  # TODO(JonathanRaines): use jax.numpy fully
 import plotly.graph_objects as go
 import scipy
 import scipy.sparse
 import tqdm
-from numpy.typing import NDArray
 
-from moveable_morphable_components import components, finite_element
+from moveable_morphable_components import finite_element
 from moveable_morphable_components import method_moving_asymptotes as mma
-from moveable_morphable_components.domain import Domain2D
 
-# import warnings
+if TYPE_CHECKING:
+    from collections.abc import Callable
 
-# warnings.filterwarnings("error")
+    from numpy.typing import NDArray
 
-E: float = 1e1  # 1e7  # Young's modulus N/mm^2
-α: float = 1e-9  # 1e-3  # Heaviside minimum value
-ε: float = 0.01  # 10  # Size of transition region for the smoothed Heaviside function
-ν: float = 0.3  # Poisson's ratio
-t: float = 1.0  # Thickness
-FORCE_MAGNITUDE: float = 1  #  N
+    from moveable_morphable_components.components import ComponentGroup
+    from moveable_morphable_components.domain import Domain2D
+
+HEAVISIDE_MIN_VALUE: float = 1e-3  # 1e-9  # Heaviside minimum value
+# 10  # Size of transition region for the smoothed Heaviside function
+HEAVISIDE_TRANSITION_WIDTH: float = 0.01
+POISSON_RATIO: float = 0.3  # Poisson's ratio
+THICKNESS: float = 1.0  # Thickness
+
+YOUNGS_MODULUS: float = 1e1  # 1e7  # Young's modulus N/mm^2
+FORCE_MAGNITUDE: float = 1  # N
 
 SCALE: float = 1.0
 NUM_CONSTRAINTS: int = 1  # Volume fraction constraint
@@ -28,7 +38,7 @@ A0: float = 1.0
 A: NDArray = np.full((NUM_CONSTRAINTS, 1), 0)
 C: NDArray = np.full((NUM_CONSTRAINTS, 1), 1000)
 D: NDArray = np.full((NUM_CONSTRAINTS, 1), 1)
-MOVE = 1.0  # Proportion of the design variable range that can be moved in a single iteration
+MOVE = 1.0  # Proportion of the design variable range that can be moved in a single step
 OBJECTIVE_TOLERANCE: float = 1e-2 * SCALE  # within a 1% change
 
 
@@ -37,16 +47,12 @@ def main(
     domain: Domain2D,
     boundary_conditions: dict,
     volume_fraction_limit: float,
-    component_list: list[components.Component],
-    design_variables_min: NDArray[float],
-    design_variables_max: NDArray[float],
+    component_list: list[ComponentGroup],
 ) -> None:
-    # Fix the left hand side in place
-    fixed_dof_ids: NDArray[np.uint] = boundary_conditions["fixed_dof_ids"]
-
+    """Do MMC method."""
     # Make a mask for the free dofs
     free_dofs: NDArray[np.uint] = np.setdiff1d(
-        np.arange(domain.num_dofs), fixed_dof_ids
+        np.arange(domain.num_dofs), boundary_conditions["fixed_dof_ids"],
     )
 
     # Load the beam on the RHS half way up
@@ -54,162 +60,138 @@ def main(
     load_magnitudes = boundary_conditions["load_magnitudes"]
 
     # sparse force vector [x1, y1, x2, y2, ...]
-    F = scipy.sparse.csc_array(
+    forces = scipy.sparse.csc_array(
         (load_magnitudes, (loaded_dof_ids, np.zeros_like(loaded_dof_ids))),
         shape=(domain.num_dofs, 1),
     )
 
     # Define the element stiffness matrix
-    K_e: NDArray[float] = finite_element.element_stiffness_matrix(
-        E, ν, domain.element_size, t
+    element_stiffness: NDArray[np.float64] = finite_element.element_stiffness_matrix(
+        YOUNGS_MODULUS, POISSON_RATIO, domain.element_size, THICKNESS,
     )
 
-    # Define the initial values for the design variables
-    initial_design_variables: NDArray[float] = np.expand_dims(
-        np.array(
-            [list(component.design_variables) for component in component_list]
-        ).flatten(),
-        axis=1,
+    # Combine the initials, mins, and maxes for the design variables from each group
+    design_variables: NDArray[np.float64] = np.hstack(
+        [cg.variable_initials_flattened for cg in component_list],
     )
-
-    num_design_variables: int = len(design_variables_min)
-
-    # Set the bounds for the design variables TODO: assumes all the same component
-    design_variables_min: NDArray[float] = np.expand_dims(
-        np.tile(design_variables_min, len(component_list)), axis=1
+    design_variables_min: NDArray[np.float64] = np.hstack(
+        [cg.bounds_flattened[0] for cg in component_list],
     )
-    design_variables_max: NDArray[float] = np.expand_dims(
-        np.tile(design_variables_max, len(component_list)), axis=1
+    design_variables_max: NDArray[np.float64] = np.hstack(
+        [cg.bounds_flattened[1] for cg in component_list],
     )
+    num_design_variables: int = design_variables.size
 
     # Initialise the starting values for mma optimization
-    design_variables: NDArray[float] = initial_design_variables.copy()
-    design_variables_prev: NDArray[float] = initial_design_variables.copy()
-    design_variables_prev_2: NDArray[float] = initial_design_variables.copy()
-    low: NDArray[float] = design_variables_min
-    upp: NDArray[float] = design_variables_max
+    low: NDArray[np.float64] = np.expand_dims(design_variables_min, axis=1)
+    upp: NDArray[np.float64] = np.expand_dims(design_variables_max, axis=1)
 
-    H_history: NDArray = np.zeros((*domain.node_shape, max_iterations))
-    component_list_history = [component_list]
+    design_variables_history: NDArray[np.float64] = np.zeros(
+        (max_iterations, design_variables.size),
+    )
     objective_history: list[float] = []
     constraint_history: list[float] = []
 
+    # Combine the level set functions from the components to form a global one
+    group_tdfs: list[Callable] = [compose_tdfs(
+        tdf=cg.tdf) for cg in component_list]
+
+    structure_tdf: Callable = compose_structure_tdf(group_tdfs, component_list)
+
+    # Used to modify the Young's modulus (E) of the elements
+    heaviside_structure: Callable = make_heaviside(
+        tdf=structure_tdf,
+        transition_width=HEAVISIDE_TRANSITION_WIDTH,
+        minimum_value=HEAVISIDE_MIN_VALUE,
+    )
+
     # Optimisation loop
     for iteration in tqdm.trange(max_iterations):
-        # Combine the level set functions from the components to form a global one
-        component_φs: NDArray[float] = evaluate_signed_distance_functions(
-            component_list=component_list, coordinates=domain.node_coordinates
-        )
-
-        φ, dφ_dφs = combine_φs(signed_distance_functions=component_φs)
-        # dφ_dφs is the derivative of the global level set function with respect to the component level set functions
-        # It is 1 where the component is the maximum and 0 elsewhere
-
-        # H is Heaviside(φ), it is used to modify the Young's modulus (E) of the elements
-        H: NDArray[float] = heaviside(φ, transition_width=ε, minimum_value=α)
-        H_history[:, :, iteration] = H.reshape(domain.node_shape, order="F")
-
-        # Calculate the derivative of H with respect to φ using the analytical form
-        # TODO: Replace with automatic differentiation?
-        dH_dφ: NDArray[float] = 3 * (1 - α) / (4 * ε) * (1 - φ**2 / ε**2)
-        dH_dφ = np.where(abs(φ) > ε, 0.0, dH_dφ)
-
-        # Calculate the derivative of φ with respect to the design variables
-        dφ_component_d_design_vars: NDArray[float] = np.concatenate(
-            [comp.φ_grad(domain.node_coordinates) for comp in component_list]
-        )
-        # TODO assumes same number of design var per component
-        dφ_d_design_vars: NDArray[float] = (
-            np.repeat(dφ_dφs, num_design_variables, axis=0) * dφ_component_d_design_vars
-        )
-
+        # Save the design variables
+        design_variables_history[iteration] = design_variables
         # Calculate the density of the elements
-        element_densities: NDArray[float] = domain.average_node_values_to_element(H)
+        node_densities: NDArray[np.float64] = heaviside_structure(
+            design_variables)
+        element_densities: NDArray[np.float64] = domain.average_node_values_to_element(
+            node_densities,
+        )
 
         # Stiffness Matrix
-        K: scipy.sparse.csc_matrix = finite_element.assemble_stiffness_matrix(
+        stiffness: scipy.sparse.csc_matrix = finite_element.assemble_stiffness_matrix(
             element_dof_ids=domain.element_dof_ids,
             element_densities=element_densities,
-            element_stiffness_matrix=K_e,
+            element_stiffness_matrix=element_stiffness,
         )
 
         # Reduce the stiffness matrix to the free dofs
-        K_free: scipy.sparse.csc_matrix = K[free_dofs, :][:, free_dofs]
+        stiffness_free: scipy.sparse.csc_matrix = stiffness[free_dofs,
+                                                            :][:, free_dofs]
 
         # Solve the system
-        U: NDArray[float] = np.zeros(domain.num_dofs)
-        U[free_dofs] = scipy.sparse.linalg.spsolve(K_free, F[free_dofs])
+        displacements: NDArray[np.float64] = np.zeros(domain.num_dofs)
+        displacements[free_dofs] = scipy.sparse.linalg.spsolve(
+            stiffness_free, forces[free_dofs])
 
         # Calculate the Energy of the Elements
-        U_by_element: NDArray[float] = U[domain.element_dof_ids]
-        element_energy: NDArray[float] = np.sum(
-            (U_by_element @ K_e) * U_by_element,
+        element_displacements: NDArray[np.float64] = displacements[domain.element_dof_ids]
+        element_energy: NDArray[np.float64] = np.sum(
+            (element_displacements @ element_stiffness) * element_displacements,
             axis=1,
         ).reshape(domain.element_shape, order="F")
 
-        node_energy: NDArray[float] = domain.element_value_to_nodes(element_energy)
+        node_energy: NDArray[np.float64] = domain.element_value_to_nodes(
+            element_energy,
+        ).reshape((-1, 1), order="F")
 
-        # Sensitivity_analysis()
-        design_variables: NDArray[float] = np.expand_dims(
-            np.array(
-                [list(component.design_variables) for component in component_list]
-            ).flatten(),
-            1,
-        )
+        # Sensitivity Analysis
 
         # Objective and derivative
-        objective: NDArray[float] = F.T @ U * SCALE
+        objective: NDArray[np.float64] = forces.T @ displacements * SCALE
         objective_history.append(objective[0])
-        d_objective_d_design_vars = -node_energy * dH_dφ * dφ_d_design_vars
-        d_objective_d_design_vars = np.nansum(
-            d_objective_d_design_vars.reshape(d_objective_d_design_vars.shape[0], -1),
-            axis=1,
+        grads = jax.jacobian(
+            heaviside_structure)(design_variables)
+        d_objective_d_design_vars = jnp.nansum(
+            -node_energy * grads, axis=0,
         )
 
         # Volume fraction constraint and derivative
         volume_fraction_constraint: float = (
-            np.sum(
-                heaviside(φ, transition_width=ε, minimum_value=0) * domain.node_volumes
+            jnp.sum(
+                make_heaviside(
+                    tdf=structure_tdf,
+                    transition_width=HEAVISIDE_TRANSITION_WIDTH,
+                    minimum_value=0)(
+                        design_variables,
+                )
+                * domain.node_volumes.reshape((-1, 1), order="F"),
             )
-            / np.sum(domain.node_volumes)
+            / jnp.sum(domain.node_volumes)
             - volume_fraction_limit
         )
-        d_volume_fraction_d_design_vars: NDArray[float] = (
-            domain.node_volumes * dH_dφ * dφ_d_design_vars
+        contraint_grads: NDArray[np.float64] = jnp.nansum(
+            domain.node_volumes.reshape(
+                (-1, 1), order="F") * grads,
+            axis=0,
         )
-        ## Enable to make the volume fraction a target rather than upper limit
-        # d_volume_fraction_d_design_vars *= volume_fraction_constraint // np.abs(
-        #     volume_fraction_constraint
-        # )  # flip the sign of the derivative
-        # volume_fraction_constraint = (
-        #     np.abs(volume_fraction_constraint) - 0.1
-        # )  # make within 10% of target
+
         constraint_history.append(volume_fraction_constraint)
-
-        d_volume_fraction_d_design_vars = np.nansum(
-            d_volume_fraction_d_design_vars.reshape(
-                d_volume_fraction_d_design_vars.shape[0], -1, order="F"
-            ),
-            axis=1,
-        )
-
-        d_objective_d_design_vars *= SCALE
 
         # Update design variables
         xmma, ymma, zmma, lam, xsi, eta, mu, zet, ss, low, upp = mma.mmasub(
             m=1,
-            n=num_design_variables * len(component_list),
+            n=num_design_variables,
             iter=iteration + 1,
-            # [x, y, angle, length, thickness]
-            xval=design_variables,
-            xmin=design_variables_min,
-            xmax=design_variables_max,
-            xold1=design_variables_prev,
-            xold2=design_variables_prev_2,
-            f0val=np.expand_dims(objective, 1),
+            xval=np.expand_dims(design_variables, axis=1),
+            xmin=np.expand_dims(design_variables_min, axis=1),
+            xmax=np.expand_dims(design_variables_max, axis=1),
+            xold1=np.expand_dims(
+                design_variables_history[max(0, iteration - 1)], axis=1),
+            xold2=np.expand_dims(
+                design_variables_history[max(0, iteration - 2)], axis=1),
+            f0val=objective,
             df0dx=np.expand_dims(d_objective_d_design_vars, 1),
-            fval=volume_fraction_constraint,
-            dfdx=np.expand_dims(d_volume_fraction_d_design_vars, 0),
+            fval=np.expand_dims(volume_fraction_constraint, axis=0),
+            dfdx=np.expand_dims(contraint_grads, 0),
             low=low,
             upp=upp,
             a0=A0,
@@ -220,94 +202,91 @@ def main(
         )
 
         # Update the components
-        new_design_variables: NDArray = xmma.copy().reshape(-1, num_design_variables)
+        new_design_variables: NDArray = xmma.copy().flatten()
         keep_mask = np.ones_like(new_design_variables, dtype=bool)
-        keep_mask[new_design_variables[:, -1] < -ε, :] = False
-        keep_mask = keep_mask.reshape(-1)
-        design_variables_prev_2 = design_variables_prev.copy()[keep_mask]
-        design_variables_prev = design_variables.copy()[keep_mask]
-        design_variables = xmma.copy()[keep_mask]
+        # keep_mask[new_design_variables[:, -1] < -ε, :] = False
+        # keep_mask = keep_mask.reshape(-1)
+        design_variables = new_design_variables[keep_mask]
         design_variables_min = design_variables_min[keep_mask]
         design_variables_max = design_variables_max[keep_mask]
         # design_variable_history[:, iteration][keep_mask] = design_variables.flatten()
-        low = low[keep_mask]
-        upp = upp[keep_mask]
+        # low = low[keep_mask]
+        # upp = upp[keep_mask]
 
-        # TODO separate fixed and free variables.
-        # -------------------
-        # component_list: list[components.Component] = [
-        #     components.UniformBeam(
-        #         center=components.Point2D(x, y),
-        #         angle=angle,
-        #         length=length,
-        #         thickness=thickness,
-        #     )
-        #     for x, y, angle, length, thickness in design_variables.reshape(
-        #         -1, num_design_variables
-        #     )
-        # ]
-        # -------------------
-        thicknesses = [c.thickness for c in component_list]
-        component_list: list[components.Component] = [
-            components.UniformBeamFixedThickness(
-                center=components.Point2D(x, y),
-                angle=angle,
-                length=length,
-                thickness=thicknesses[i],
-            )
-            for i, (x, y, angle, length) in enumerate(
-                design_variables.reshape(-1, num_design_variables)
-            )
-        ]
-        # -------------------
-        component_list_history.append(component_list)
-        if is_converged(
-            iteration=iteration,
-            objective_tolerance=OBJECTIVE_TOLERANCE,
-            objective_history=objective_history,
-            constraint_value=volume_fraction_constraint,
-            window_size=5,
-        ):
-            print("Converged")
-            break
+        # if is_converged(
+        #     iteration=iteration,
+        #     objective_tolerance=OBJECTIVE_TOLERANCE,
+        #     objective_history=objective_history,
+        #     constraint_value=volume_fraction_constraint,
+        #     window_size=5,
+        # ):
+        #     print("Converged")
+        # break
 
     return (
-        component_list_history,
-        H_history[:, :, :iteration],
-        objective_history[:iteration],
-        constraint_history[:iteration],
+        design_variables_history[: iteration + 1],
+        objective_history[: iteration + 1],
+        constraint_history[: iteration + 1],
     )
 
 
-def evaluate_signed_distance_functions(
-    component_list: list[components.Component],
-    coordinates: tuple[NDArray[float], NDArray[float]],
-) -> NDArray[float]:
-    return np.array([component(coordinates) for component in component_list])
+def compose_tdfs(
+    tdf: Callable[[NDArray[np.float64]], jnp.ndarray],
+) -> Callable[[NDArray[np.float64]], jnp.ndarray]:
+    """Compose a group-level topology description function.
+
+    Group tdf takes in an num_components by num_design_variables array
+    """
+
+    def group_tdf(design_variables: NDArray[np.float64]) -> NDArray[np.float64]:
+        """Calculate the value of the combined Topology Description Function for a group of components.
+
+        Args:
+            design_variables: NDArray[np.float64] - The design variables for the group of components. dims: num_components x num_design_variables
+
+        Returns:
+            NDArray[np.float64] - The combined Topology Description Function value at each point in the domain
+                (the domain is baked into the TDF of the group).
+
+        """
+        return jnp.max(jax.vmap(tdf)(design_variables), axis=0)
+
+    return group_tdf
 
 
-def combine_φs(
-    signed_distance_functions: NDArray[float],
-    ks_aggregation_power: int = 10,  # Was 100 but getting NAN
-) -> tuple[NDArray, NDArray]:
-    """Calculates the level set function φ"""
+def compose_structure_tdf(
+    group_tdfs: list[Callable], component_list: list[ComponentGroup],
+) -> Callable[[NDArray[np.float64]], NDArray[np.float64]]:
+    """Return a function that unravels the design variables and calculates the combined TDF for the structure."""
 
-    # # Kolmogorov-Smirnov (KS) aggregation as per the original MMC-2D code
-    # temp: NDArray = jnp.exp(signed_distance_functions * ks_aggregation_power)
-    # φ_global: NDArray = jnp.maximum(
-    #     jnp.full(temp.shape[1:], -1e3),
-    #     jnp.log(np.sum(temp, axis=0)) / ks_aggregation_power,
-    # )
+    def structure_tdf(design_variables: NDArray[np.float64]) -> NDArray[np.float64]:
+        group_design_variable_counts = jnp.array(
+            [cg.num_design_variables for cg in component_list],
+        )
+        group_design_variables_per_component = jnp.array(
+            [cg.free_variable_col_indexes.size for cg in component_list],
+        )
+        if design_variables.size != jnp.sum(group_design_variable_counts):
+            msg = "design_variables has the wrong number of elements for the component groups provided"
+            raise ValueError(msg)
 
-    # dφ_global_dφ_components = temp / jnp.sum(temp, axis=0)
+        group_design_variables_flat: list[NDArray] = jnp.split(
+            design_variables, jnp.cumsum(group_design_variable_counts),
+        )
+        group_design_variables = [
+            design_variables.reshape(-1, n)
+            for design_variables, n in zip(
+                group_design_variables_flat, group_design_variables_per_component,
+            )
+        ]
 
-    φ_global: NDArray = np.max(signed_distance_functions, axis=0)
-    φ_global = np.where(φ_global < -1e3, -1e3, φ_global)
-    dφ_global_dφ_components = np.where(
-        signed_distance_functions == φ_global, 1, 0
-    ).astype(float)
+        group_tdf_values = [
+            tdf(dv) for tdf, dv in zip(group_tdfs, group_design_variables)
+        ]
 
-    return φ_global, dφ_global_dφ_components
+        return jnp.max(jnp.array(group_tdf_values), axis=0)
+
+    return structure_tdf
 
 
 def is_converged(
@@ -317,75 +296,83 @@ def is_converged(
     constraint_value,
     window_size,
 ) -> bool:
+    """Check if the optimisation has converged."""
     if iteration > window_size and constraint_value < 0:
         smoothed_objective_change: NDArray = moving_average(
-            objective_history, window_size
+            objective_history, window_size,
         )
         smoothed_objective_deltas: NDArray = np.diff(smoothed_objective_change)
-        if np.all(np.abs(smoothed_objective_deltas) < objective_tolerance):
-            return True
-        return False
+        return bool(np.all(np.abs(smoothed_objective_deltas) < objective_tolerance))
+    return False
 
 
 def moving_average(values, n):
+    """Calculate a rolling average for values with window size n."""
     ret: NDArray = np.cumsum(values, dtype=float)
     ret[n:] = ret[n:] - ret[:-n]
-    return ret[n - 1 :] / n
+    return ret[n - 1:] / n
 
 
-def heaviside(
-    x: NDArray, transition_width: float, minimum_value: float = 0.0
-) -> NDArray:
-    """
-    Smoothed Heaviside function
-    https://en.wikipedia.org/wiki/Heaviside_step_function
+def make_heaviside(
+    tdf: Callable[[NDArray[np.float64]], NDArray[np.float64]],
+    transition_width: float,
+    minimum_value: float = 0.0,
+) -> Callable[[NDArray[np.float64]], NDArray[np.float64]]:
+    """Smoothed Heaviside function.
+
+    https://en.wikipedia.org/wiki/Heaviside_step_function.
 
     An element-wise function that 1 when x > 0, and minimum_value when x < 0.
     The step is smoothed over the transition_width.
 
-    Parameters:
-        x: NDArray - The input array
-        minimum_value: float - The Young's modulus of void (outside the components)
+    Args:
+        tdf: Callable - The topology description function to make crisp
+        minimum_value: float - The lower value for areas where x<0
         transition_width: float - The size of the transition region
 
     Returns:
         NDArray - The smoothed Heaviside of the input array
 
-    Example:
-        >>> heaviside(np.array([-1.0, 1.0]), 0.1, 0.1)
-        array([0.1 , 1. ])
     """
-    x = np.array(x)
-    h_x = (
-        3
-        * (1 - minimum_value)
-        / 4
-        * (x / transition_width - x**3 / (3 * transition_width**3))
-        + (1 + minimum_value) / 2
-    )
-    h_x = np.where(x < -transition_width, minimum_value, h_x)
-    h_x = np.where(x > transition_width, 1, h_x)
-    return h_x
+
+    def smooth_heaviside(design_variables: NDArray[np.float64]) -> NDArray[np.float64]:
+        x = tdf(design_variables)
+        h_x = (
+            3
+            * (1 - minimum_value)
+            / 4
+            * (x / transition_width - x**3 / (3 * transition_width**3))
+            + (1 + minimum_value) / 2
+        )
+        h_x = jnp.where(x < -transition_width, minimum_value, h_x)
+        return jnp.where(x > transition_width, 1, h_x)
+
+    return smooth_heaviside
 
 
-def plot_values(values: NDArray, domain_shape: tuple[int, int]) -> None:
-    # return px.imshow(values.reshape(domain_shape, order="F").T, origin="lower")
+def plot_values(values: NDArray, domain_shape: tuple[int, int]) -> go.Figure:
+    """Plot values for debugging."""
     return go.Figure(
         data=go.Contour(
             z=values.reshape(domain_shape, order="F").T,
-        )
+        ),
     )
 
 
-def connected_components(singed_distance_functions: NDArray[float]) -> NDArray[bool]:
-    """Finds connected components in the list of components
-    parameters:
-        singed_distance_functions: NDArray[float] - The stack of signed distance functions for each component
-    returns:
+def connected_components(
+    singed_distance_functions: NDArray[np.float64],
+) -> NDArray[np.bool]:
+    """Find connected components in the list of components.
+
+    Args:
+        singed_distance_functions: NDArray[np.float64] - The stack of TDFs
+    Returns:
         NDArray[bool] - The connectivity matrix
+
     """
     num_components = singed_distance_functions.shape[0]
-    connectivity_matrix = np.zeros((num_components, num_components), dtype=bool)
+    connectivity_matrix = np.zeros(
+        (num_components, num_components), dtype=bool)
     for component_1, component_2 in itertools.combinations(range(num_components), 2):
         sdf_1 = singed_distance_functions[component_1, :, :]
         sdf_2 = singed_distance_functions[component_2, :, :]
@@ -395,19 +382,19 @@ def connected_components(singed_distance_functions: NDArray[float]) -> NDArray[b
     return connectivity_matrix
 
 
-def point_is_in_component(
-    signed_distance_functions: list[components.Component], points: NDArray[float]
-) -> list[int]:
-    """Returns a list of indices indicating if a point is in a component
-    parameters:
-        singed_distance_functions: NDArray[float] - The stack of signed distance functions for each component
-    returns:
-        NDArray[int] - the indexes of components that the point is within
-    """
-    components_touching_point = set()
-    for point in points:
-        signed_distances: list[float] = np.array(
-            [sdf(point) for sdf in signed_distance_functions]
-        )
-        components_touching_point.update(np.argwhere(signed_distances > 0).flatten())
-    return list(components_touching_point)
+# def point_is_in_component(
+#     signed_distance_functions: list[components.Component], points: NDArray[np.float64]
+# ) -> list[int]:
+#     """Returns a list of indices indicating if a point is in a component
+#     parameters:
+#         singed_distance_functions: NDArray[np.float64] - The stack of signed distance functions for each component
+#     returns:
+#         NDArray[int] - the indexes of components that the point is within
+#     """
+#     components_touching_point = set()
+#     for point in points:
+#         signed_distances: list[float] = np.array(
+#             [sdf(point) for sdf in signed_distance_functions]
+#         )
+#         components_touching_point.update(np.argwhere(signed_distances > 0).flatten())
+#     return list(components_touching_point)

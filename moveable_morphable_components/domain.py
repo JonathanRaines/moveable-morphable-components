@@ -1,6 +1,3 @@
-import itertools
-from typing import Generator
-
 import numpy as np
 from numpy.typing import NDArray
 
@@ -93,11 +90,12 @@ class Domain2D:
             np.full(self.element_shape, np.prod(self.dimensions / self.element_shape))
         )
 
-        self.node_coordinates = np.meshgrid(
+        x2d, y2d = np.meshgrid(
             np.linspace(0, self.dimensions[0], self.node_shape[0]),
             np.linspace(0, self.dimensions[1], self.node_shape[1]),
             indexing="ij",
         )
+        self.node_coordinates = np.stack((x2d.ravel(order="F"), y2d.ravel(order="F")))
 
     def node_xys_to_ids(self, point: tuple[int, int]) -> int:
         return np.ravel_multi_index(point, self.node_shape, order="F")
