@@ -65,10 +65,10 @@ class ComponentGroup:
         E.g. a group of two circles defined by [Point2D(x,y), radius] could have bounds
         as follows:
 
-        (
-            [Point2D(0.0, 0.0), 0.0, Point2D(0.0, 0.0), 0.0],
-            [Point2D(2.0, 1.0), 2.0, Point2D(2.0, 1.0), 2.0],
-        )
+        ([Point2D(0.0, 0.0), 0.0, Point2D(0.0, 0.0), 0.0],
+            [Point2D(2.0, 1.0), 2.0, Point2D(2.0, 1.0), 2.0])
+
+        The first array is the min for each variable, and the second array is the max.
         """
         mins: NDArray[np.float64] = np.tile(
             self.variable_mins[self.free_variable_col_indexes], self.num_components,

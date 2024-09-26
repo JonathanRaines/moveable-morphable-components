@@ -21,6 +21,9 @@ pillow = "^10.4.0"
 
 [tool.poetry.group.dev.dependencies]
 pytest = "^8.3.2"
+sphinx = "^8.0.2"
+pydata-sphinx-theme = "^0.15.4"
+ghp-import = "^2.1.0"
 
 [build-system]
 requires = ["poetry-core"]
