@@ -18,5 +18,8 @@
         "xmma",
         "ymma",
         "zmma"
+    ],
+    "python.analysis.extraPaths": [
+        "./moveable_morphable_components"
     ]
 }

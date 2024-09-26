@@ -14,7 +14,8 @@
 		"vscode": {
 			"extensions": [
 				"charliermarsh.ruff",
-				"tamasfe.even-better-toml"
+				"tamasfe.even-better-toml",
+				"ms-python.pylint"
 			]
 		}
 	}
