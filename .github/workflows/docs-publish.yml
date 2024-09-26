@@ -1,0 +1,32 @@
+name: Build and Publish Sphinx Docs
+
+on:
+  push:
+    branches: [ main ]
+  
+  workflow_dispatch:
+
+jobs:
+    build_and_publish_sphinx:
+        runs-on: ubuntu-latest
+        env:
+            GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        steps:
+        - name: Checkout 
+          uses: actions/checkout@v4
+        - name: Set up Python 3.10
+          uses: actions/setup-python@v4
+          with:
+            python-version: '3.10'
+        - name: Install Sphinx, themes, and ghp-import
+          run: pip install sphinx sphinx-pydata-theme ghp-import
+        - name: Build Docs
+          run: |
+            cd docs
+            make html
+            cd ..
+        # Use the ghp-import package to automaticaly push the docs to the gh-pages branch
+        # ghp-import moves the built html files to the root of the gh-pages branch, creates a
+        # .nojekyll file, and pushes the changes to the remote gh-pages branch
+        - name: Run ghp-import
+          run: ghp-import --no-jekyll --push --force --no-history docs/build/html
