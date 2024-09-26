@@ -47,5 +47,5 @@ html_context = {
     "github_user": "JonathanRaines",
     "github_repo": "moveable-morphable-components",
     "github_version": "main",
-    "doc_path": "docs/",
+    "doc_path": "docs/source/",
 }
