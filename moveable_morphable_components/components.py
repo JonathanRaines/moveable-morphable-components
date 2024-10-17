@@ -6,15 +6,10 @@ from typing import TYPE_CHECKING, Callable, NamedTuple
 import jax.numpy as jnp
 import numpy as np
 
+from moveable_morphable_components.domain import Point2D
+
 if TYPE_CHECKING:
     from numpy.typing import NDArray
-
-
-class Point2D(NamedTuple):
-    """Point in 2D space."""
-
-    x: np.float64 | jnp.ndarray
-    y: np.float64 | jnp.ndarray
 
 
 @dataclass(frozen=True)

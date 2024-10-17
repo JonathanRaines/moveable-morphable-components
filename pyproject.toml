@@ -1,6 +1,6 @@
 [tool.poetry]
 name = "moveable-morphable-components"
-version = "0.1.0"
+version = "0.2.0"
 description = ""
 authors = ["Jonathan Raines <jr0278@bristol.ac.uk>"]
 readme = "README.md"

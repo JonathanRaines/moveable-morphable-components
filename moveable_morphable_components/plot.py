@@ -2,13 +2,19 @@ from __future__ import annotations
 
 import io
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 import numpy as np
 import plotly.graph_objects as go
 from PIL import Image
 from plotly.express.colors import qualitative, sample_colorscale
+from plotly.subplots import make_subplots
 
-from moveable_morphable_components import components
+if TYPE_CHECKING:
+    from numpy.typing import NDArray
+
+    from moveable_morphable_components import components
+    from moveable_morphable_components.domain import Domain2D
 
 COLOURS = qualitative.Pastel[:2]
 TRANSPARENT = "rgba(0,0,0,0)"
@@ -48,30 +54,31 @@ TRANSPARENT = "rgba(0,0,0,0)"
 
 
 def save_component_animation(
-    design_var_history,
+    design_variable_history: NDArray,
     component_groups: list[components.ComponentGroup],
-    coords,
-    dimensions,
+    domain: Domain2D,
     duration: int = 5_000,
     filename: str = "mmc",
 ) -> None:
     num_components: int = sum(
         [cg.num_design_variables for cg in component_groups])
     frames: list[Image.Image] = []
-    contour_settings = dict(start=0, end=1, size=2)
+    contour_settings = {"start": 0, "end": 1, "size": 2}
     colour_scales = [
         [[0, TRANSPARENT], [1, c]]
         for c in sample_colorscale(qualitative.Pastel, num_components)
     ]
 
-    x_step = coords[0][1]
-    n_x = int(dimensions[0] / x_step) + 1
-    y_step = coords[1][n_x]
-    n_y = int(dimensions[1] / y_step) + 1
+    # Get the number of nodes in each axis.
+    n_x, n_y = domain.node_shape
 
-    for global_design_vars in design_var_history:
+    # For each timestep
+    for global_design_vars in design_variable_history:
         fig = go.Figure()
 
+        # Separate the design variables, reshape them into an array than is
+        # the correct number of design variables wide, then evaluate them
+        # at all the nodes in the domain.
         group_design_var_count = [
             cg.num_design_variables for cg in component_groups]
         design_vars_per_component = [
@@ -85,8 +92,8 @@ def save_component_animation(
             for gdv, n in zip(grouped_design_vars, design_vars_per_component)
         ]
         sdfs = []
-        for i, cg in enumerate(component_groups):
-            sdfs.extend([cg.tdf(design_vars).reshape(n_x, n_y, order="F")
+        for i, group in enumerate(component_groups):
+            sdfs.extend([group.tdf(design_vars).reshape(n_x, n_y, order="F")
                         for design_vars in grouped_design_vars[i]])
 
         traces = [
@@ -97,8 +104,8 @@ def save_component_animation(
                 line_smoothing=0,
                 showscale=False,
                 showlegend=False,
-                x=np.linspace(0, dimensions[0], n_x),
-                y=np.linspace(0, dimensions[1], n_y),
+                x=np.linspace(0, domain.dims.x, n_x),
+                y=np.linspace(0, domain.dims.y, n_y),
             )
             for i, sdf in enumerate(sdfs)
         ]
@@ -107,7 +114,8 @@ def save_component_animation(
         fig.update_layout(
             {
                 "template": "simple_white",
-                # plot_bgcolor=TRANSPARENT, #TODO(JonathanRaines): PIL seems to layer images so can't have transparent background
+                # TODO(JonathanRaines): PIL seems to layer images so can't have transparent background
+                # plot_bgcolor=TRANSPARENT,
                 # paper_bgcolor=TRANSPARENT,
             },
         )
@@ -116,7 +124,7 @@ def save_component_animation(
 
         frames.append(Image.open(io.BytesIO(frame)))
 
-    frame_duration = duration // len(design_var_history)
+    frame_duration = duration // len(design_variable_history)
     frames[0].save(
         fp=Path(filename).with_suffix(".gif"),
         save_all=True,
@@ -226,25 +234,26 @@ def save_component_animation(
 #     )
 
 
-# def objective_and_constraint(objective, constraint) -> go.Figure:
-#     obj_fig = make_subplots(specs=[[{"secondary_y": True}]])
-#     obj_fig.add_trace(
-#         go.Scatter(
-#             x=np.arange(len(constraint)), y=objective, mode="lines", name="Objective",
-#         ),
-#         secondary_y=False,
-#     )
-#     obj_fig.add_trace(
-#         go.Scatter(
-#             x=np.arange(len(constraint)),
-#             y=constraint,
-#             mode="lines",
-#             name="Volume Fraction Error",
-#         ),
-#         secondary_y=True,
-#     )
-#     obj_fig.update_layout(title="Objective", template="simple_white")
-#     return obj_fig
+def objective_and_constraint(objective, constraint) -> go.Figure:
+    """Plot the objective and constraint values over time."""
+    obj_fig = make_subplots(specs=[[{"secondary_y": True}]])
+    obj_fig.add_trace(
+        go.Scatter(
+            x=np.arange(len(constraint)), y=objective, mode="lines", name="Objective",
+        ),
+        secondary_y=False,
+    )
+    obj_fig.add_trace(
+        go.Scatter(
+            x=np.arange(len(constraint)),
+            y=constraint,
+            mode="lines",
+            name="Volume Fraction Error",
+        ),
+        secondary_y=True,
+    )
+    obj_fig.update_layout(title="Objective", template="simple_white")
+    return obj_fig
 
 
 # def objectives_comparison(objective: list) -> go.Figure:

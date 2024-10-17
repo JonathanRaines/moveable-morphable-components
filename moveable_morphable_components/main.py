@@ -48,7 +48,7 @@ def main(
     boundary_conditions: dict,
     volume_fraction_limit: float,
     component_list: list[ComponentGroup],
-) -> None:
+) -> tuple[NDArray, NDArray, NDArray]:
     """Do MMC method."""
     # Make a mask for the free dofs
     free_dofs: NDArray[np.uint] = np.setdiff1d(

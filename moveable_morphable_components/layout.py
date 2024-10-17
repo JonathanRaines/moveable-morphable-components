@@ -9,11 +9,11 @@ from moveable_morphable_components import components
 
 
 def grid_of_uniform_beams(
-    n_x: int, n_y: int, dimensions: tuple[float, float], thickness: float
+    n_x: int, n_y: int, dimensions: tuple[float, float], thickness: float,
 ) -> jnp.ndarray:
-    """Initialises a grid of crossed Uniform Beams in the domain
+    """Initialise a grid of crossed Uniform Beams in the domain.
 
-    Parameters:
+    Args:
         n_x: int - The number of component pairs (crosses) in the x direction
         n_y: int - The number of component pairs (crosses) in the y direction
         dimensions: tuple[float, float] - The dimensions to fill with the grid
@@ -21,23 +21,23 @@ def grid_of_uniform_beams(
 
     Returns:
         list[Component] - The list of components
+
     """
     # Work out the size of the regions each crossed pair will occupy
     region_size: NDArray = dimensions / (n_x, n_y)
 
     # Generate the center coordinates of regions
     x_coords: NDArray = np.linspace(
-        region_size[0] / 2, dimensions[0] - region_size[0] / 2, n_x
+        region_size[0] / 2, dimensions[0] - region_size[0] / 2, n_x,
     )
     y_coords: NDArray = np.linspace(
-        region_size[1] / 2, dimensions[1] - region_size[1] / 2, n_y
+        region_size[1] / 2, dimensions[1] - region_size[1] / 2, n_y,
     )
 
     # Angle and length to put the components across the region diagonals
     angle: float = np.arctan2(region_size[1], region_size[0])
     length: float = np.linalg.norm(region_size)
 
-    design_variables: list[list[float]] = []
     for y, x in itertools.product(y_coords, x_coords):
         for sign in [-1, 1]:
             design_variables.append([x, y, sign * angle, length, thickness])
@@ -46,18 +46,21 @@ def grid_of_uniform_beams(
 
 
 def grid_of_uniform_beams_of_fixed_thickness(
-    n_x: int, n_y: int, dimensions: tuple[float, float], thickness: list[float] | float
+    n_x: int, n_y: int, dimensions: tuple[float, float], thickness: list[float] | float,
 ) -> jnp.ndarray:
     """Initialises a grid of crossed Uniform Beams in the domain
 
-    Parameters:
+    Parameters
+    ----------
         n_x: int - The number of component pairs (crosses) in the x direction
         n_y: int - The number of component pairs (crosses) in the y direction
         dimensions: tuple[float, float] - The dimensions to fill with the grid
         thickness: float - The thickness of the beam components
 
-    Returns:
+    Returns
+    -------
         list[Component] - The list of components
+
     """
     if isinstance(thickness, float):
         thickness = [thickness] * n_x * n_y * 2
@@ -71,10 +74,10 @@ def grid_of_uniform_beams_of_fixed_thickness(
 
     # Generate the center coordinates of regions
     x_coords: NDArray = np.linspace(
-        region_size[0] / 2, dimensions[0] - region_size[0] / 2, n_x
+        region_size[0] / 2, dimensions[0] - region_size[0] / 2, n_x,
     )
     y_coords: NDArray = np.linspace(
-        region_size[1] / 2, dimensions[1] - region_size[1] / 2, n_y
+        region_size[1] / 2, dimensions[1] - region_size[1] / 2, n_y,
     )
 
     # Angle and length to put the components across the region diagonals
@@ -91,7 +94,7 @@ def grid_of_uniform_beams_of_fixed_thickness(
                     angle=sign * angle,
                     length=length,
                     thickness=thickness[i],
-                )
+                ),
             )
             i += 1
 
@@ -118,7 +121,7 @@ def random_beams(
                 angle=angle,
                 length=length,
                 thickness=thickness,
-            )
+            ),
         )
 
     return component_list
@@ -133,6 +136,6 @@ def fixed_thickness_beam_from_df(df: pd.DataFrame) -> jnp.ndarray:
                 angle=row.angle,
                 length=row.length,
                 thickness=row.width,
-            )
+            ),
         )
     return component_list
