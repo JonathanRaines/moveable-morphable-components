@@ -1,4 +1,5 @@
 """The main loop of the MMC method."""
+
 from __future__ import annotations
 
 import itertools
@@ -23,14 +24,13 @@ if TYPE_CHECKING:
     from moveable_morphable_components.components import ComponentGroup
     from moveable_morphable_components.domain import Domain2D
 
-HEAVISIDE_MIN_VALUE: float = 1e-3  # 1e-9  # Heaviside minimum value
+HEAVISIDE_MIN_VALUE: float = 1e-6  # 1e-9  # Heaviside minimum value
 # 10  # Size of transition region for the smoothed Heaviside function
 HEAVISIDE_TRANSITION_WIDTH: float = 0.01
 POISSON_RATIO: float = 0.3  # Poisson's ratio
 THICKNESS: float = 1.0  # Thickness
 
 YOUNGS_MODULUS: float = 1e1  # 1e7  # Young's modulus N/mm^2
-FORCE_MAGNITUDE: float = 1  # N
 
 SCALE: float = 1.0
 NUM_CONSTRAINTS: int = 1  # Volume fraction constraint
@@ -52,7 +52,8 @@ def main(
     """Do MMC method."""
     # Make a mask for the free dofs
     free_dofs: NDArray[np.uint] = np.setdiff1d(
-        np.arange(domain.num_dofs), boundary_conditions["fixed_dof_ids"],
+        np.arange(domain.num_dofs),
+        boundary_conditions["fixed_dof_ids"],
     )
 
     # Load the beam on the RHS half way up
@@ -67,7 +68,10 @@ def main(
 
     # Define the element stiffness matrix
     element_stiffness: NDArray[np.float64] = finite_element.element_stiffness_matrix(
-        YOUNGS_MODULUS, POISSON_RATIO, domain.element_size, THICKNESS,
+        YOUNGS_MODULUS,
+        POISSON_RATIO,
+        domain.element_size,
+        THICKNESS,
     )
 
     # Combine the initials, mins, and maxes for the design variables from each group
@@ -93,8 +97,7 @@ def main(
     constraint_history: list[float] = []
 
     # Combine the level set functions from the components to form a global one
-    group_tdfs: list[Callable] = [compose_tdfs(
-        tdf=cg.tdf) for cg in component_list]
+    group_tdfs: list[Callable] = [compose_tdfs(tdf=cg.tdf) for cg in component_list]
 
     structure_tdf: Callable = compose_structure_tdf(group_tdfs, component_list)
 
@@ -104,14 +107,14 @@ def main(
         transition_width=HEAVISIDE_TRANSITION_WIDTH,
         minimum_value=HEAVISIDE_MIN_VALUE,
     )
+    # heaviside_structure: Callable = make_leaky_relu(tdf=structure_tdf)
 
     # Optimisation loop
     for iteration in tqdm.trange(max_iterations):
         # Save the design variables
         design_variables_history[iteration] = design_variables
         # Calculate the density of the elements
-        node_densities: NDArray[np.float64] = heaviside_structure(
-            design_variables)
+        node_densities: NDArray[np.float64] = heaviside_structure(design_variables)
         element_densities: NDArray[np.float64] = domain.average_node_values_to_element(
             node_densities,
         )
@@ -124,16 +127,19 @@ def main(
         )
 
         # Reduce the stiffness matrix to the free dofs
-        stiffness_free: scipy.sparse.csc_matrix = stiffness[free_dofs,
-                                                            :][:, free_dofs]
+        stiffness_free: scipy.sparse.csc_matrix = stiffness[free_dofs, :][:, free_dofs]
 
         # Solve the system
         displacements: NDArray[np.float64] = np.zeros(domain.num_dofs)
         displacements[free_dofs] = scipy.sparse.linalg.spsolve(
-            stiffness_free, forces[free_dofs])
+            stiffness_free,
+            forces[free_dofs],
+        )
 
         # Calculate the Energy of the Elements
-        element_displacements: NDArray[np.float64] = displacements[domain.element_dof_ids]
+        element_displacements: NDArray[np.float64] = displacements[
+            domain.element_dof_ids
+        ]
         element_energy: NDArray[np.float64] = np.sum(
             (element_displacements @ element_stiffness) * element_displacements,
             axis=1,
@@ -142,35 +148,29 @@ def main(
         node_energy: NDArray[np.float64] = domain.element_value_to_nodes(
             element_energy,
         ).reshape((-1, 1), order="F")
+        log_node_energy = np.log(node_energy + 1 + 1e-9)
+        # plot_values(log_node_energy, (81, 41), title="Log Node Energy").show()
 
         # Sensitivity Analysis
 
         # Objective and derivative
         objective: NDArray[np.float64] = forces.T @ displacements * SCALE
         objective_history.append(objective[0])
-        grads = jax.jacobian(
-            heaviside_structure)(design_variables)
+        grads = jax.jacobian(heaviside_structure)(design_variables)
         d_objective_d_design_vars = jnp.nansum(
-            -node_energy * grads, axis=0,
+            -log_node_energy * grads,
+            axis=0,
         )
 
         # Volume fraction constraint and derivative
         volume_fraction_constraint: float = (
-            jnp.sum(
-                make_heaviside(
-                    tdf=structure_tdf,
-                    transition_width=HEAVISIDE_TRANSITION_WIDTH,
-                    minimum_value=0)(
-                        design_variables,
-                )
-                * domain.node_volumes.reshape((-1, 1), order="F"),
-            )
-            / jnp.sum(domain.node_volumes)
-            - volume_fraction_limit
+            jnp.mean(node_densities) - volume_fraction_limit
         )
-        contraint_grads: NDArray[np.float64] = jnp.nansum(
-            domain.node_volumes.reshape(
-                (-1, 1), order="F") * grads,
+
+        # TODO(JonathanRaines): The solution seems independent
+        # of the constraint gradient sign. Flipping it does nothing...
+        constraint_grads: NDArray[np.float64] = jnp.nansum(
+            domain.node_volumes.reshape((-1, 1), order="F") * grads,
             axis=0,
         )
 
@@ -185,13 +185,17 @@ def main(
             xmin=np.expand_dims(design_variables_min, axis=1),
             xmax=np.expand_dims(design_variables_max, axis=1),
             xold1=np.expand_dims(
-                design_variables_history[max(0, iteration - 1)], axis=1),
+                design_variables_history[max(0, iteration - 1)],
+                axis=1,
+            ),
             xold2=np.expand_dims(
-                design_variables_history[max(0, iteration - 2)], axis=1),
+                design_variables_history[max(0, iteration - 2)],
+                axis=1,
+            ),
             f0val=objective,
             df0dx=np.expand_dims(d_objective_d_design_vars, 1),
             fval=np.expand_dims(volume_fraction_constraint, axis=0),
-            dfdx=np.expand_dims(contraint_grads, 0),
+            dfdx=np.expand_dims(constraint_grads, 0),
             low=low,
             upp=upp,
             a0=A0,
@@ -250,16 +254,32 @@ def compose_tdfs(
 
         """
         return jnp.max(jax.vmap(tdf)(design_variables), axis=0)
+        # K-S method as per original paper
+        return (
+            jnp.log(jnp.sum(jnp.exp(jax.vmap(tdf)(design_variables) * 100), axis=0))
+            / 100
+        )
 
     return group_tdf
 
 
 def compose_structure_tdf(
-    group_tdfs: list[Callable], component_list: list[ComponentGroup],
+    group_tdfs: list[Callable],
+    component_list: list[ComponentGroup],
 ) -> Callable[[NDArray[np.float64]], NDArray[np.float64]]:
-    """Return a function that unravels the design variables and calculates the combined TDF for the structure."""
+    """Compose component Topology Description Functions into a structure TDF.
+
+    Return a function that unravels the design variables and calculates the combined TDF
+        for the structure.
+    """
 
     def structure_tdf(design_variables: NDArray[np.float64]) -> NDArray[np.float64]:
+        """Evaluate the Topology Description Function for the structure.
+
+        Given some design variable, calculate the value of the topology description
+        function at each point in the domain. Points are set when the component
+        group TDF is created.
+        """
         group_design_variable_counts = jnp.array(
             [cg.num_design_variables for cg in component_list],
         )
@@ -267,24 +287,33 @@ def compose_structure_tdf(
             [cg.free_variable_col_indexes.size for cg in component_list],
         )
         if design_variables.size != jnp.sum(group_design_variable_counts):
-            msg = "design_variables has the wrong number of elements for the component groups provided"
+            msg = """Design_variables has the wrong number of elements for the component
+                groups provided"""
             raise ValueError(msg)
 
         group_design_variables_flat: list[NDArray] = jnp.split(
-            design_variables, jnp.cumsum(group_design_variable_counts),
+            design_variables,
+            jnp.cumsum(group_design_variable_counts)[:-1],
         )
         group_design_variables = [
             design_variables.reshape(-1, n)
             for design_variables, n in zip(
-                group_design_variables_flat, group_design_variables_per_component,
+                group_design_variables_flat,
+                group_design_variables_per_component,
+                strict=True,
             )
         ]
 
         group_tdf_values = [
-            tdf(dv) for tdf, dv in zip(group_tdfs, group_design_variables)
+            tdf(dv) for tdf, dv in zip(group_tdfs, group_design_variables, strict=True)
         ]
 
         return jnp.max(jnp.array(group_tdf_values), axis=0)
+
+        # K-S method as per original paper
+        return (
+            jnp.log(jnp.sum(jnp.exp(jnp.array(group_tdf_values) * 100), axis=0)) / 100
+        )
 
     return structure_tdf
 
@@ -299,7 +328,8 @@ def is_converged(
     """Check if the optimisation has converged."""
     if iteration > window_size and constraint_value < 0:
         smoothed_objective_change: NDArray = moving_average(
-            objective_history, window_size,
+            objective_history,
+            window_size,
         )
         smoothed_objective_deltas: NDArray = np.diff(smoothed_objective_change)
         return bool(np.all(np.abs(smoothed_objective_deltas) < objective_tolerance))
@@ -310,7 +340,7 @@ def moving_average(values, n):
     """Calculate a rolling average for values with window size n."""
     ret: NDArray = np.cumsum(values, dtype=float)
     ret[n:] = ret[n:] - ret[:-n]
-    return ret[n - 1:] / n
+    return ret[n - 1 :] / n
 
 
 def make_heaviside(
@@ -350,11 +380,29 @@ def make_heaviside(
     return smooth_heaviside
 
 
-def plot_values(values: NDArray, domain_shape: tuple[int, int]) -> go.Figure:
+def make_leaky_relu(
+    tdf: Callable[[NDArray[np.float64]], NDArray[np.float64]],
+) -> Callable[[NDArray[np.float64]], NDArray[np.float64]]:
+    def leaky_relu(design_variables: NDArray[np.float64]) -> NDArray[np.float64]:
+        x = tdf(design_variables)
+        negative_slope = 1
+        return jnp.where(x > 0, 1 + x * negative_slope, x * negative_slope)
+
+    return leaky_relu
+
+
+def plot_values(
+    values: NDArray,
+    domain_shape: tuple[int, int],
+    title: str = "",
+) -> go.Figure:
     """Plot values for debugging."""
     return go.Figure(
         data=go.Contour(
             z=values.reshape(domain_shape, order="F").T,
+        ),
+        layout=go.Layout(
+            title=title,
         ),
     )
 
@@ -371,8 +419,7 @@ def connected_components(
 
     """
     num_components = singed_distance_functions.shape[0]
-    connectivity_matrix = np.zeros(
-        (num_components, num_components), dtype=bool)
+    connectivity_matrix = np.zeros((num_components, num_components), dtype=bool)
     for component_1, component_2 in itertools.combinations(range(num_components), 2):
         sdf_1 = singed_distance_functions[component_1, :, :]
         sdf_2 = singed_distance_functions[component_2, :, :]

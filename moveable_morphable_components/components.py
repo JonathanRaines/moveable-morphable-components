@@ -1,7 +1,8 @@
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Callable, NamedTuple
+from typing import TYPE_CHECKING, NamedTuple
 
 import jax.numpy as jnp
 import numpy as np
@@ -16,8 +17,7 @@ if TYPE_CHECKING:
 class ComponentGroup:
     """A collection of components that share the same topology description function and design variables."""
 
-    topology_description_function: Callable[[
-        NamedTuple], np.float64 | jnp.ndarray]
+    topology_description_function: Callable[[NamedTuple], np.float64 | jnp.ndarray]
     variable_initial: NDArray[np.float64]
     variable_mins: NDArray[np.float64]
     variable_maxes: NDArray[np.float64]
@@ -32,7 +32,8 @@ class ComponentGroup:
     def free_variable_col_indexes(self) -> NDArray:
         """Indexes of non-frozen design variables."""
         return np.setdiff1d(
-            np.arange(self.variable_initial.shape[1]), self.frozen_variables,
+            np.arange(self.variable_initial.shape[1]),
+            self.frozen_variables,
         )
 
     @property
@@ -66,10 +67,12 @@ class ComponentGroup:
         The first array is the min for each variable, and the second array is the max.
         """
         mins: NDArray[np.float64] = np.tile(
-            self.variable_mins[self.free_variable_col_indexes], self.num_components,
+            self.variable_mins[self.free_variable_col_indexes],
+            self.num_components,
         )
         maxes: NDArray[np.float64] = np.tile(
-            self.variable_maxes[self.free_variable_col_indexes], self.num_components,
+            self.variable_maxes[self.free_variable_col_indexes],
+            self.num_components,
         )
         return mins, maxes
 

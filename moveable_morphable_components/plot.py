@@ -9,6 +9,7 @@ import plotly.graph_objects as go
 from PIL import Image
 from plotly.express.colors import qualitative, sample_colorscale
 from plotly.subplots import make_subplots
+from tqdm import tqdm
 
 if TYPE_CHECKING:
     from numpy.typing import NDArray
@@ -20,37 +21,74 @@ COLOURS = qualitative.Pastel[:2]
 TRANSPARENT = "rgba(0,0,0,0)"
 
 
-# def component_image(component_list, coords, dimensions) -> go.Figure:
-#     fig = go.Figure()
+def component_image(
+    component_groups: list[components.ComponentGroup],
+    design_variables: NDArray,
+    domain: Domain2D,
+) -> go.Figure:
+    num_components: int = sum([cg.num_design_variables for cg in component_groups])
+    contour_settings = {"start": 0, "end": 1, "size": 2}
+    colour_scales = [
+        [[0, TRANSPARENT], [1, c]]
+        for c in sample_colorscale(qualitative.Pastel, num_components)
+    ]
+    fig = go.Figure()
 
-#     tdf_values = evaluate_topology_description_functions(component_list, coords)
-#     contour_settings = {"start": 0, "end": 1, "size": 2}
-#     colour_scales = [[[0, TRANSPARENT], [1, c]] for c in COLOURS]
+    # Separate the design variables, reshape them into an array than is
+    # the correct number of design variables wide, then evaluate them
+    # at all the nodes in the domain.
+    group_design_var_count = [cg.num_design_variables for cg in component_groups]
+    design_vars_per_component = [
+        len(cg.free_variable_col_indexes) for cg in component_groups
+    ]
+    grouped_design_vars = np.split(
+        design_variables,
+        np.cumsum(group_design_var_count),
+        axis=0,
+    )
+    grouped_design_vars = [
+        gdv.reshape(-1, n)
+        for gdv, n in zip(
+            grouped_design_vars,
+            design_vars_per_component,
+            strict=False,
+        )
+    ]
+    n_x, n_y = domain.node_shape
+    sdfs = []
+    for i, group in enumerate(component_groups):
+        sdfs.extend(
+            [
+                group.tdf(design_vars).reshape(n_x, n_y, order="F")
+                for design_vars in grouped_design_vars[i]
+            ],
+        )
 
-#     traces = [
-#         go.Contour(
-#             z=sdf.T,
-#             colorscale=colour_scales[i % len(colour_scales)],
-#             contours=contour_settings,
-#             line_smoothing=0,
-#             showscale=False,
-#             showlegend=False,
-#             x=np.linspace(0, dimensions[0], coords[0].shape[0]),
-#             y=np.linspace(0, dimensions[1], coords[0].shape[1]),
-#         )
-#         for i, sdf in enumerate(tdf_values)
-#     ]
+    traces = [
+        go.Contour(
+            z=sdf.T,
+            colorscale=colour_scales[i % len(colour_scales)],
+            contours=contour_settings,
+            line_smoothing=0,
+            showscale=False,
+            showlegend=False,
+            x=np.linspace(0, domain.dims.x, n_x),
+            y=np.linspace(0, domain.dims.y, n_y),
+        )
+        for i, sdf in enumerate(sdfs)
+    ]
 
-#     fig.add_traces(traces)
-#     fig.update_layout(
-#         dict(
-#             template="simple_white",
-#             plot_bgcolor=TRANSPARENT,
-#             paper_bgcolor=TRANSPARENT,
-#         ),
-#     )
+    fig.add_traces(traces)
+    fig.update_layout(
+        {
+            "template": "simple_white",
+            # TODO(JonathanRaines): PIL seems to layer images so can't have transparent background
+            # plot_bgcolor=TRANSPARENT,
+            # paper_bgcolor=TRANSPARENT,
+        },
+    )
 
-#     return fig
+    return fig
 
 
 def save_component_animation(
@@ -60,65 +98,11 @@ def save_component_animation(
     duration: int = 5_000,
     filename: str = "mmc",
 ) -> None:
-    num_components: int = sum(
-        [cg.num_design_variables for cg in component_groups])
     frames: list[Image.Image] = []
-    contour_settings = {"start": 0, "end": 1, "size": 2}
-    colour_scales = [
-        [[0, TRANSPARENT], [1, c]]
-        for c in sample_colorscale(qualitative.Pastel, num_components)
-    ]
-
-    # Get the number of nodes in each axis.
-    n_x, n_y = domain.node_shape
 
     # For each timestep
-    for global_design_vars in design_variable_history:
-        fig = go.Figure()
-
-        # Separate the design variables, reshape them into an array than is
-        # the correct number of design variables wide, then evaluate them
-        # at all the nodes in the domain.
-        group_design_var_count = [
-            cg.num_design_variables for cg in component_groups]
-        design_vars_per_component = [
-            len(cg.free_variable_col_indexes) for cg in component_groups
-        ]
-        grouped_design_vars = np.split(
-            global_design_vars, np.cumsum(group_design_var_count), axis=0,
-        )
-        grouped_design_vars = [
-            gdv.reshape(-1, n)
-            for gdv, n in zip(grouped_design_vars, design_vars_per_component)
-        ]
-        sdfs = []
-        for i, group in enumerate(component_groups):
-            sdfs.extend([group.tdf(design_vars).reshape(n_x, n_y, order="F")
-                        for design_vars in grouped_design_vars[i]])
-
-        traces = [
-            go.Contour(
-                z=sdf.T,
-                colorscale=colour_scales[i % len(colour_scales)],
-                contours=contour_settings,
-                line_smoothing=0,
-                showscale=False,
-                showlegend=False,
-                x=np.linspace(0, domain.dims.x, n_x),
-                y=np.linspace(0, domain.dims.y, n_y),
-            )
-            for i, sdf in enumerate(sdfs)
-        ]
-
-        fig.add_traces(traces)
-        fig.update_layout(
-            {
-                "template": "simple_white",
-                # TODO(JonathanRaines): PIL seems to layer images so can't have transparent background
-                # plot_bgcolor=TRANSPARENT,
-                # paper_bgcolor=TRANSPARENT,
-            },
-        )
+    for global_design_vars in tqdm(design_variable_history, desc="Creating animation"):
+        fig = component_image(component_groups, global_design_vars, domain)
 
         frame = fig.to_image(format="png")
 
@@ -239,7 +223,10 @@ def objective_and_constraint(objective, constraint) -> go.Figure:
     obj_fig = make_subplots(specs=[[{"secondary_y": True}]])
     obj_fig.add_trace(
         go.Scatter(
-            x=np.arange(len(constraint)), y=objective, mode="lines", name="Objective",
+            x=np.arange(len(constraint)),
+            y=objective,
+            mode="lines",
+            name="Objective",
         ),
         secondary_y=False,
     )
