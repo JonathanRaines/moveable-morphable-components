@@ -74,6 +74,7 @@ def cantilever(max_iterations: int) -> None:
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Run cantilever beam optimization.")
     parser.add_argument(
+        "-i",
         "--iterations",
         type=int,
         default=100,
