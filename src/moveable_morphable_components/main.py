@@ -343,6 +343,7 @@ def moving_average(values, n):
     return ret[n - 1 :] / n
 
 
+@jax.jit
 def make_heaviside(
     tdf: Callable[[NDArray[np.float64]], NDArray[np.float64]],
     transition_width: float,

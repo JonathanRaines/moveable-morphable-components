@@ -1,5 +1,4 @@
-"""
-GCMMA-MMA-Python
+"""GCMMA-MMA-Python.
 
 This file is part of GCMMA-MMA-Python. GCMMA-MMA-Python is licensed under the terms of GNU
 General Public License as published by the Free Software Foundation. For more information and
@@ -23,11 +22,10 @@ according to the specific problem being solved.
 """
 
 # Loading modules
-from __future__ import division
-from scipy.sparse import diags  # or use numpy: from numpy import diag as diags
-from scipy.linalg import solve  # or use numpy: from numpy.linalg import solve
-from typing import Tuple
+
 import numpy as np
+from scipy.linalg import solve  # or use numpy: from numpy.linalg import solve
+from scipy.sparse import diags  # or use numpy: from numpy import diag as diags
 
 
 def mmasub(
@@ -50,7 +48,7 @@ def mmasub(
     c: np.ndarray,
     d: np.ndarray,
     move: float,
-) -> Tuple[
+) -> tuple[
     np.ndarray,
     np.ndarray,
     float,
@@ -62,8 +60,7 @@ def mmasub(
     np.ndarray,
     np.ndarray,
 ]:
-    """
-    Solve the MMA (Method of Moving Asymptotes) subproblem for optimization.
+    """Solve the MMA (Method of Moving Asymptotes) subproblem for optimization.
 
     Minimize:
         f_0(x) + a_0 * z + sum(c_i * y_i + 0.5 * d_i * (y_i)^2)
@@ -107,8 +104,8 @@ def mmasub(
             - s (np.ndarray): Slack variables for the general constraints.
             - low (np.ndarray): Updated lower bounds for the design variables.
             - upp (np.ndarray): Updated upper bounds for the design variables.
-    """
 
+    """
     # epsimin = 0.0000001
     epsimin = 1e-10
     # raa0 = 0.00001
@@ -188,7 +185,22 @@ def mmasub(
 
     # Solving the subproblem using the primal-dual Newton method
     xmma, ymma, zmma, lam, xsi, eta, mu, zet, s = subsolv(
-        m, n, epsimin, low, upp, alfa, beta, p0, q0, P, Q, a0, a, b, c, d
+        m,
+        n,
+        epsimin,
+        low,
+        upp,
+        alfa,
+        beta,
+        p0,
+        q0,
+        P,
+        Q,
+        a0,
+        a,
+        b,
+        c,
+        d,
     )
 
     # Return values
@@ -215,7 +227,7 @@ def gcmmasub(
     a: np.ndarray,
     c: np.ndarray,
     d: np.ndarray,
-) -> Tuple[
+) -> tuple[
     np.ndarray,
     np.ndarray,
     float,
@@ -228,8 +240,7 @@ def gcmmasub(
     float,
     float,
 ]:
-    """
-    Solve the GCMMA (Generalized Convex Method of Moving Asymptotes) subproblem for optimization.
+    """Solve the GCMMA (Generalized Convex Method of Moving Asymptotes) subproblem for optimization.
 
     Minimize:
         r0 + SUM[p0_j / (upp_j - x_j) + q0_j / (x_j - low_j)]
@@ -274,8 +285,8 @@ def gcmmasub(
             - s (np.ndarray): Additional variables in the subproblem.
             - f0app (float): Approximation of the objective function value.
             - fapp (float): Approximation of the constraint function values.
-    """
 
+    """
     eeen = np.ones((n, 1))
     zeron = np.zeros((n, 1))
 
@@ -331,7 +342,22 @@ def gcmmasub(
 
     # Solving the subproblem using the primal-dual Newton method
     xmma, ymma, zmma, lam, xsi, eta, mu, zet, s = subsolv(
-        m, n, epsimin, low, upp, alfa, beta, p0, q0, P, Q, a0, a, b, c, d
+        m,
+        n,
+        epsimin,
+        low,
+        upp,
+        alfa,
+        beta,
+        p0,
+        q0,
+        P,
+        Q,
+        a0,
+        a,
+        b,
+        c,
+        d,
     )
 
     # Calculations of f0app and fapp
@@ -363,7 +389,7 @@ def subsolv(
     b: np.ndarray,
     c: np.ndarray,
     d: np.ndarray,
-) -> Tuple[
+) -> tuple[
     np.ndarray,
     np.ndarray,
     float,
@@ -374,8 +400,7 @@ def subsolv(
     np.ndarray,
     np.ndarray,
 ]:
-    """
-    Solve the MMA (Method of Moving Asymptotes) subproblem for optimization.
+    """Solve the MMA (Method of Moving Asymptotes) subproblem for optimization.
 
     Minimize:
         SUM[p0j/(uppj-xj) + q0j/(xj-lowj)] + a0*z + SUM[ci*yi + 0.5*di*(yi)^2]
@@ -409,8 +434,8 @@ def subsolv(
             - zmma (float): Optimal value of the variable z.
             - slack (np.ndarray): Slack variables for the general MMA constraints.
             - lagrange (np.ndarray): Lagrange multipliers for the constraints.
-    """
 
+    """
     een = np.ones((n, 1))
     eem = np.ones((m, 1))
     epsi = 1
@@ -498,7 +523,7 @@ def subsolv(
                 bb = np.concatenate((blam, delz), axis=0)
                 Alam = np.asarray(
                     diags(diaglamyi.flatten(), 0)
-                    + (diags(diagxinv.flatten(), 0).dot(GG.T).T).dot(GG.T)
+                    + (diags(diagxinv.flatten(), 0).dot(GG.T).T).dot(GG.T),
                 )
                 AAr1 = np.concatenate((Alam, a), axis=1)
                 AAr2 = np.concatenate((a, -zet / z), axis=0).T
@@ -512,7 +537,7 @@ def subsolv(
                 dellamyi = dellam + dely / diagy
                 Axx = np.asarray(
                     diags(diagx.flatten(), 0)
-                    + (diags(diaglamyiinv.flatten(), 0).dot(GG).T).dot(GG)
+                    + (diags(diaglamyiinv.flatten(), 0).dot(GG).T).dot(GG),
                 )
                 azz = zet / z + np.dot(a.T, (a / diaglamyi))
                 axz = np.dot(-GG.T, (a / diaglamyi))
@@ -598,7 +623,8 @@ def subsolv(
                 res = lam * s - epsvecm
                 residu1 = np.concatenate((rex, rey, rez), axis=0)
                 residu2 = np.concatenate(
-                    (relam, rexsi, reeta, remu, rezet, res), axis=0
+                    (relam, rexsi, reeta, remu, rezet, res),
+                    axis=0,
                 )
                 residu = np.concatenate((residu1, residu2), axis=0)
                 resinew = np.sqrt(np.dot(residu.T, residu))
@@ -643,9 +669,8 @@ def kktcheck(
     a: np.ndarray,
     c: np.ndarray,
     d: np.ndarray,
-) -> Tuple[np.ndarray, float, float]:
-    """
-    Evaluate the residuals for the Karush-Kuhn-Tucker (KKT) conditions of a nonlinear programming problem.
+) -> tuple[np.ndarray, float, float]:
+    """Evaluate the residuals for the Karush-Kuhn-Tucker (KKT) conditions of a nonlinear programming problem.
 
     The KKT conditions are necessary for optimality in constrained optimization problems. This function computes
     the residuals for these conditions based on the current values of the variables, constraints, and Lagrange multipliers.
@@ -677,8 +702,8 @@ def kktcheck(
             - residu (np.ndarray): Residual vector for the KKT conditions.
             - residunorm (float): Norm of the residual vector.
             - residumax (float): Maximum absolute value among the residuals.
-    """
 
+    """
     # Compute residuals for the KKT conditions
     rex = df0dx + np.dot(dfdx.T, lam) - xsi + eta
     rey = c + d * y - mu - lam
@@ -718,14 +743,14 @@ def raaupdate(
     raa0eps: np.ndarray,
     raaeps: np.ndarray,
     epsimin: float,
-) -> Tuple[np.ndarray, np.ndarray]:
-    """
-    Update the parameters raa0 and raa during an inner iteration.
+) -> tuple[np.ndarray, np.ndarray]:
+    """Update the parameters raa0 and raa during an inner iteration.
 
     This function adjusts the values of raa0 and raa based on the current function values and
     approximations. The updated values help in improving the accuracy of the function approximations.
 
-    Parameters:
+    Parameters
+    ----------
         xmma (np.ndarray): Current values of the optimization variables.
         xval (np.ndarray): Current values of the variables for comparison.
         xmin (np.ndarray): Lower bounds of the optimization variables.
@@ -742,12 +767,13 @@ def raaupdate(
         raaeps (np.ndarray): Minimum value for raa.
         epsimin (float): Small perturbation added to the function approximations.
 
-    Returns:
+    Returns
+    -------
         Tuple[np.ndarray, np.ndarray]:
             - raa0 (np.ndarray): Updated values of the raa0 variable.
             - raa (np.ndarray): Updated values of the raa variable.
-    """
 
+    """
     raacofmin = 1e-12
     eeem = np.ones((raa.size, 1))
     eeen = np.ones((xmma.size, 1))
@@ -786,14 +812,14 @@ def concheck(
     fapp: np.ndarray,
     fvalnew: np.ndarray,
 ) -> int:
-    """
-    Check if the current approximations are conservative.
+    """Check if the current approximations are conservative.
 
     This function evaluates if the current approximations meet the conservativeness criterion.
     It compares the updated approximations with the new values and sets the `conserv` parameter
     to 1 if the approximations are conservative and 0 otherwise.
 
-    Parameters:
+    Parameters
+    ----------
         m (int)  : The dimension of the approximation vectors.
         epsimin (np.ndarray): Small perturbation added to the approximations.
         f0app (np.ndarray): Current approximation of the function at the initial point.
@@ -801,10 +827,11 @@ def concheck(
         fapp (np.ndarray): Current approximation of the function at subsequent points.
         fvalnew (np.ndarray): New function values at subsequent points.
 
-    Returns:
+    Returns
+    -------
         int: A flag indicating if the approximations are conservative (1) or not (0).
-    """
 
+    """
     eeem = np.ones((m, 1))
     f0appe = f0app + epsimin
     fappe = fapp + epsimin * eeem
@@ -835,11 +862,11 @@ def asymp(
     raaeps: float,
     df0dx: np.ndarray,
     dfdx: np.ndarray,
-) -> Tuple[np.ndarray, np.ndarray, float, np.ndarray]:
-    """
-    Calculate the parameters raa0, raa, low, and upp at the beginning of each outer iteration.
+) -> tuple[np.ndarray, np.ndarray, float, np.ndarray]:
+    """Calculate the parameters raa0, raa, low, and upp at the beginning of each outer iteration.
 
-    Parameters:
+    Parameters
+    ----------
         outeriter (int): Current outer iteration number.
         n (int): Number of design variables.
         xval (np.ndarray): Current values of the design variables.
@@ -856,14 +883,15 @@ def asymp(
         df0dx (np.ndarray): Gradient of the objective function.
         dfdx (np.ndarray): Gradient of the constraints.
 
-    Returns:
+    Returns
+    -------
         Tuple[np.ndarray, np.ndarray, float, np.ndarray]:
             - low (np.ndarray): Updated values for the lower asymptotes.
             - upp (np.ndarray): Updated values for the upper asymptotes.
             - raa0 (float): Updated value of the raa0 parameter.
             - raa (np.ndarray): Updated values of the raa parameter.
-    """
 
+    """
     eeen = np.ones((n, 1))
     asyinit = 0.5
     asyincr = 1.2
