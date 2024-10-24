@@ -7,7 +7,7 @@ from typing import TYPE_CHECKING
 
 import jax
 import jax.numpy as jnp
-import numpy as np  # TODO(JonathanRaines): use jax.numpy fully
+import numpy as np
 import plotly.graph_objects as go
 import scipy
 import scipy.sparse
@@ -27,7 +27,7 @@ if TYPE_CHECKING:
     from moveable_morphable_components.domain import Domain2D
 
 HEAVISIDE_MIN_VALUE: float = 1e-6  # 1e-9  # Heaviside minimum value
-# 10  # Size of transition region for the smoothed Heaviside function
+# Size of transition region for the smoothed Heaviside function
 HEAVISIDE_TRANSITION_WIDTH: float = 0.01
 POISSON_RATIO: float = 0.3  # Poisson's ratio
 THICKNESS: float = 1.0  # Thickness
@@ -41,7 +41,9 @@ A: NDArray = np.full((NUM_CONSTRAINTS, 1), 0)
 C: NDArray = np.full((NUM_CONSTRAINTS, 1), 1000)
 D: NDArray = np.full((NUM_CONSTRAINTS, 1), 1)
 MOVE = 1.0  # Proportion of the design variable range that can be moved in a single step
-OBJECTIVE_TOLERANCE: float = 1e-2 * SCALE  # within a 1% change
+OBJECTIVE_TOLERANCE: float = 1e-2  # % change
+OBJECTIVE_MOVING_AVERAGE_WINDOW: int = 10
+OBJECTIVE_CHECK_LAST_N: int = 5
 
 
 def main(
@@ -50,6 +52,7 @@ def main(
     boundary_conditions: dict,
     volume_fraction_limit: float,
     component_list: list[ComponentGroup],
+    ktt_tolerance: float = 0,
 ) -> tuple[NDArray, NDArray, NDArray]:
     """Do MMC method."""
     # Make a mask for the free dofs
@@ -109,7 +112,6 @@ def main(
         transition_width=HEAVISIDE_TRANSITION_WIDTH,
         minimum_value=HEAVISIDE_MIN_VALUE,
     )
-    # heaviside_structure: Callable = make_leaky_relu(tdf=structure_tdf)
 
     # Optimisation loop
     for iteration in tqdm.trange(max_iterations):
@@ -151,10 +153,8 @@ def main(
             element_energy,
         ).reshape((-1, 1), order="F")
         log_node_energy = np.log(node_energy + 1 + 1e-9)
-        # plot_values(log_node_energy, (81, 41), title="Log Node Energy").show()
 
         # Sensitivity Analysis
-
         # Objective and derivative
         objective: NDArray[np.float64] = forces.T @ displacements * SCALE
         objective_history.append(objective[0])
@@ -169,8 +169,6 @@ def main(
             jnp.mean(node_densities) - volume_fraction_limit
         )
 
-        # TODO(JonathanRaines): The solution seems independent
-        # of the constraint gradient sign. Flipping it does nothing...
         constraint_grads: NDArray[np.float64] = jnp.nansum(
             domain.node_volumes.reshape((-1, 1), order="F") * grads,
             axis=0,
@@ -207,27 +205,48 @@ def main(
             move=MOVE,
         )
 
+        _, ktt_norm, _ = mma.kktcheck(
+            m=1,
+            n=num_design_variables,
+            x=xmma,
+            y=ymma,
+            z=zmma,
+            lam=lam,
+            xsi=xsi,
+            eta=eta,
+            mu=mu,
+            zet=zet,
+            s=ss,
+            xmin=np.expand_dims(design_variables_min, axis=1),
+            xmax=np.expand_dims(design_variables_max, axis=1),
+            df0dx=np.expand_dims(d_objective_d_design_vars, 1),
+            fval=np.expand_dims(volume_fraction_constraint, axis=0),
+            dfdx=np.expand_dims(constraint_grads, 0),
+            a0=A0,
+            a=A,
+            c=C,
+            d=D,
+        )
+
         # Update the components
         new_design_variables: NDArray = xmma.copy().flatten()
-        keep_mask = np.ones_like(new_design_variables, dtype=bool)
-        # keep_mask[new_design_variables[:, -1] < -ε, :] = False
-        # keep_mask = keep_mask.reshape(-1)
-        design_variables = new_design_variables[keep_mask]
-        design_variables_min = design_variables_min[keep_mask]
-        design_variables_max = design_variables_max[keep_mask]
-        # design_variable_history[:, iteration][keep_mask] = design_variables.flatten()
-        # low = low[keep_mask]
-        # upp = upp[keep_mask]
+        design_variables = new_design_variables
 
-        # if is_converged(
-        #     iteration=iteration,
-        #     objective_tolerance=OBJECTIVE_TOLERANCE,
-        #     objective_history=objective_history,
-        #     constraint_value=volume_fraction_constraint,
-        #     window_size=5,
-        # ):
-        #     print("Converged")
-        # break
+        # Can't converge if the constraint is not met
+        if constraint_history[-1] > 0:
+            continue
+
+        # Check for convergence
+        if (
+            iteration > OBJECTIVE_MOVING_AVERAGE_WINDOW + OBJECTIVE_CHECK_LAST_N
+            and is_objective_converged(
+                objective_tolerance=OBJECTIVE_TOLERANCE,
+                objective_history=objective_history,
+                window_size=OBJECTIVE_MOVING_AVERAGE_WINDOW,
+                check_last_n=OBJECTIVE_CHECK_LAST_N,
+            )
+        ) or ktt_norm < ktt_tolerance:
+            break
 
     return (
         design_variables_history[: iteration + 1],
@@ -256,11 +275,6 @@ def compose_tdfs(
 
         """
         return jnp.max(jax.vmap(tdf)(design_variables), axis=0)
-        # K-S method as per original paper
-        return (
-            jnp.log(jnp.sum(jnp.exp(jax.vmap(tdf)(design_variables) * 100), axis=0))
-            / 100
-        )
 
     return group_tdf
 
@@ -307,33 +321,36 @@ def compose_structure_tdf(
 
         return jnp.max(jnp.asarray(group_tdf_values), axis=0)
 
-        # K-S method as per original paper
-        return (
-            jnp.log(jnp.sum(jnp.exp(jnp.asarray(group_tdf_values) * 100), axis=0)) / 100
-        )
-
     return structure_tdf
 
 
-def is_converged(
-    iteration,
-    objective_tolerance,
-    objective_history,
-    constraint_value,
-    window_size,
+def is_objective_converged(
+    objective_tolerance: float,
+    objective_history: NDArray[np.float64],
+    window_size: int,
+    check_last_n: int = 5,
 ) -> bool:
-    """Check if the optimisation has converged."""
-    if iteration > window_size and constraint_value < 0:
-        smoothed_objective_change: NDArray = moving_average(
-            objective_history,
-            window_size,
-        )
-        smoothed_objective_deltas: NDArray = np.diff(smoothed_objective_change)
-        return bool(np.all(np.abs(smoothed_objective_deltas) < objective_tolerance))
-    return False
+    """Check if the optimisation has converged.
+
+    Calculates a moving average of the objective function for the last n iterations.
+    If the fractional change in the moving average is less than the tolerance, the
+    optimisation is considered converged.
+    """
+    smoothed_objective: NDArray = moving_average(
+        objective_history[-(window_size + check_last_n) :],
+        window_size,
+    )
+    smoothed_objective_fractional_deltas: NDArray = (
+        np.diff(smoothed_objective) / smoothed_objective[-1]
+    )
+    return bool(
+        np.all(
+            np.abs(smoothed_objective_fractional_deltas) < objective_tolerance,
+        ),
+    )
 
 
-def moving_average(values, n):
+def moving_average(values: list[float], n: int) -> float:
     """Calculate a rolling average for values with window size n."""
     ret: NDArray = np.cumsum(values, dtype=float)
     ret[n:] = ret[n:] - ret[:-n]
