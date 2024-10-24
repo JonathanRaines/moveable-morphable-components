@@ -10,6 +10,7 @@ import numpy as np
 from moveable_morphable_components.domain import Point2D
 
 if TYPE_CHECKING:
+    from jax.typing import ArrayLike
     from numpy.typing import NDArray
 
 
@@ -17,14 +18,14 @@ if TYPE_CHECKING:
 class ComponentGroup:
     """A collection of components that share the same topology description function and design variables."""
 
-    topology_description_function: Callable[[NamedTuple], np.float64 | jnp.ndarray]
+    topology_description_function: Callable[[NamedTuple], np.float64 | ArrayLike]
     variable_initial: NDArray[np.float64]
     variable_mins: NDArray[np.float64]
     variable_maxes: NDArray[np.float64]
     frozen_variables: list[int] | None = None
 
     @property
-    def tdf(self) -> Callable[[NamedTuple], np.float64 | jnp.ndarray]:
+    def tdf(self) -> Callable[[NamedTuple], np.float64 | ArrayLike]:
         """Allow abbreviated access to the topology description function."""
         return self.topology_description_function
 
@@ -81,15 +82,15 @@ class CircleSpec(NamedTuple):
     """Design variables for a circle."""
 
     center: Point2D
-    radius: float | jnp.ndarray
+    radius: float | ArrayLike
 
 
 def circle(
     point: Point2D,
-) -> Callable[[CircleSpec], np.float64 | jnp.ndarray]:
+) -> Callable[[CircleSpec], np.float64 | ArrayLike]:
     """Create a topological description function for a circle."""
 
-    def tdf(spec: CircleSpec) -> np.float64 | jnp.ndarray:
+    def tdf(spec: CircleSpec) -> np.float64 | ArrayLike:
         """Topological Description Function for a circle."""
         center = Point2D(*spec[:2])
         radius = spec[2]
@@ -102,22 +103,22 @@ class BeamSpec(NamedTuple):
     """Design Variables for a beam."""
 
     center: Point2D
-    angle: float | jnp.ndarray
-    length: float | jnp.ndarray
-    thickness: float | jnp.ndarray
+    angle: float | ArrayLike
+    length: float | ArrayLike
+    thickness: float | ArrayLike
 
 
 def uniform_beam(
     point: Point2D,
-) -> Callable[[BeamSpec], np.float64 | jnp.ndarray]:
+) -> Callable[[BeamSpec], np.float64 | ArrayLike]:
     """Create Topological Description Function for a beam with a uniform width."""
 
-    def tdf(spec: BeamSpec) -> np.float64 | jnp.ndarray:
+    def tdf(spec: BeamSpec) -> np.float64 | ArrayLike:
         """Topological Description Function for a beam with a uniform width."""
         center = Point2D(*spec[:2])
         angle, length, thickness = spec[2:]
         # because the matrix gets flipped top to bottom
-        rotation_matrix: NDArray = jnp.array(
+        rotation_matrix: NDArray = jnp.asarray(
             [
                 [jnp.cos(angle), jnp.sin(angle)],
                 [-jnp.sin(angle), jnp.cos(angle)],

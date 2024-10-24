@@ -3,6 +3,7 @@ import itertools
 import jax.numpy as jnp
 import numpy as np
 import pandas as pd
+from jax import Array
 from numpy.typing import NDArray
 
 from moveable_morphable_components import components
@@ -13,7 +14,7 @@ def grid_of_uniform_beams(
     n_y: int,
     dimensions: tuple[float, float],
     thickness: float,
-) -> jnp.ndarray:
+) -> Array:
     """Initialise a grid of crossed Uniform Beams in the domain.
 
     Args:
@@ -50,7 +51,7 @@ def grid_of_uniform_beams(
         for sign, y, x in itertools.product([-1, 1], y_coords, x_coords)
     ]
 
-    return jnp.array(design_variables)
+    return jnp.asarray(design_variables)
 
 
 def grid_of_uniform_beams_of_fixed_thickness(
@@ -58,7 +59,7 @@ def grid_of_uniform_beams_of_fixed_thickness(
     n_y: int,
     dimensions: tuple[float, float],
     thickness: list[float] | float,
-) -> jnp.ndarray:
+) -> Array:
     """Initialise a grid of crossed Uniform Beams in the domain.
 
     Parameters;
@@ -105,7 +106,7 @@ def grid_of_uniform_beams_of_fixed_thickness(
         for i, (sign, y, x) in enumerate(itertools.product([-1, 1], y_coords, x_coords))
     ]
 
-    return jnp.array(design_variables)
+    return jnp.asarray(design_variables)
 
 
 def random(
@@ -113,17 +114,17 @@ def random(
     high: NDArray,
     n: int,
     np_random: np.random.Generator | None,
-) -> jnp.ndarray:
+) -> Array:
     """Randomly place n components in the domain."""
     if np_random is None:
         np_random = np.random.default_rng()
 
     design_vars = np_random.uniform(low=low, high=high, size=(n, low.size))
 
-    return jnp.array(design_vars)
+    return jnp.asarray(design_vars)
 
 
-def fixed_thickness_beam_from_df(df: pd.DataFrame) -> jnp.ndarray:
+def fixed_thickness_beam_from_df(df: pd.DataFrame) -> Array:
     component_list = []
     for i, row in df.iterrows():
         component_list.append(

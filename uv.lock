@@ -386,8 +386,8 @@ wheels = [
 
 [[package]]
 name = "moveable-morphable-components"
-version = "0.2.0"
-source = { virtual = "." }
+version = "0.3.0"
+source = { editable = "." }
 dependencies = [
     { name = "jax", extra = ["cuda12"] },
     { name = "kaleido" },

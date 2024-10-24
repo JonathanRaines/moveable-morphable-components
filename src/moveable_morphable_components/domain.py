@@ -2,10 +2,10 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, NamedTuple
 
-import jax.numpy as jnp
 import numpy as np
 
 if TYPE_CHECKING:
+    from jax.typing import ArrayLike
     from numpy.typing import NDArray
 
 
@@ -93,8 +93,7 @@ class Domain2D:
         ).reshape(-1, 8)
 
         self.node_volumes = self.element_value_to_nodes(
-            np.full(self.element_shape, np.prod(
-                self.dimensions / self.element_shape)),
+            np.full(self.element_shape, np.prod(self.dimensions / self.element_shape)),
         )
 
         x2d, y2d = np.meshgrid(
@@ -102,8 +101,7 @@ class Domain2D:
             np.linspace(0, self.dimensions[1], self.node_shape[1]),
             indexing="ij",
         )
-        self.node_coordinates = np.stack(
-            (x2d.ravel(order="F"), y2d.ravel(order="F")))
+        self.node_coordinates = np.stack((x2d.ravel(order="F"), y2d.ravel(order="F")))
 
     @property
     def dims(self) -> Point2D:
@@ -117,8 +115,7 @@ class Domain2D:
     def dof_ids_to_coords(self, dof_ids: NDArray) -> NDArray:
         """Get the coordinate for a Degree of Freedom by index."""
         node_indices = np.unique(dof_ids // 2)
-        node_xy = np.array(np.unravel_index(
-            node_indices, self.node_shape, order="F")).T
+        node_xy = np.array(np.unravel_index(node_indices, self.node_shape, order="F")).T
         return node_xy / self.node_shape * self.dimensions
 
     def coord_to_nearest_node(self, point: tuple[float, float]) -> NDArray:
@@ -213,5 +210,5 @@ class Domain2D:
 class Point2D(NamedTuple):
     """Point in 2D space."""
 
-    x: np.float64 | jnp.ndarray
-    y: np.float64 | jnp.ndarray
+    x: np.float64 | ArrayLike
+    y: np.float64 | Arraylike

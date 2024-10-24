@@ -19,6 +19,8 @@ from moveable_morphable_components import method_moving_asymptotes as mma
 if TYPE_CHECKING:
     from collections.abc import Callable
 
+    from jax import Array
+    from jax.typing import ArrayLike
     from numpy.typing import NDArray
 
     from moveable_morphable_components.components import ComponentGroup
@@ -235,8 +237,8 @@ def main(
 
 
 def compose_tdfs(
-    tdf: Callable[[NDArray[np.float64]], jnp.ndarray],
-) -> Callable[[NDArray[np.float64]], jnp.ndarray]:
+    tdf: Callable[[NDArray[np.float64]], ArrayLike],
+) -> Callable[[NDArray[np.float64]], Array]:
     """Compose a group-level topology description function.
 
     Group tdf takes in an num_components by num_design_variables array
@@ -272,25 +274,20 @@ def compose_structure_tdf(
     Return a function that unravels the design variables and calculates the combined TDF
         for the structure.
     """
+    group_design_variable_counts: Array = jnp.asarray(
+        [cg.num_design_variables for cg in component_list],
+    )
+    group_design_variables_per_component: list[int] = [
+        cg.free_variable_col_indexes.size for cg in component_list
+    ]
 
-    def structure_tdf(design_variables: NDArray[np.float64]) -> NDArray[np.float64]:
+    def structure_tdf(design_variables: ArrayLike) -> Array:
         """Evaluate the Topology Description Function for the structure.
 
         Given some design variable, calculate the value of the topology description
         function at each point in the domain. Points are set when the component
         group TDF is created.
         """
-        group_design_variable_counts = jnp.array(
-            [cg.num_design_variables for cg in component_list],
-        )
-        group_design_variables_per_component = jnp.array(
-            [cg.free_variable_col_indexes.size for cg in component_list],
-        )
-        if design_variables.size != jnp.sum(group_design_variable_counts):
-            msg = """Design_variables has the wrong number of elements for the component
-                groups provided"""
-            raise ValueError(msg)
-
         group_design_variables_flat: list[NDArray] = jnp.split(
             design_variables,
             jnp.cumsum(group_design_variable_counts)[:-1],
@@ -308,11 +305,11 @@ def compose_structure_tdf(
             tdf(dv) for tdf, dv in zip(group_tdfs, group_design_variables, strict=True)
         ]
 
-        return jnp.max(jnp.array(group_tdf_values), axis=0)
+        return jnp.max(jnp.asarray(group_tdf_values), axis=0)
 
         # K-S method as per original paper
         return (
-            jnp.log(jnp.sum(jnp.exp(jnp.array(group_tdf_values) * 100), axis=0)) / 100
+            jnp.log(jnp.sum(jnp.exp(jnp.asarray(group_tdf_values) * 100), axis=0)) / 100
         )
 
     return structure_tdf
@@ -343,7 +340,6 @@ def moving_average(values, n):
     return ret[n - 1 :] / n
 
 
-@jax.jit
 def make_heaviside(
     tdf: Callable[[NDArray[np.float64]], NDArray[np.float64]],
     transition_width: float,
@@ -366,6 +362,7 @@ def make_heaviside(
 
     """
 
+    @jax.jit
     def smooth_heaviside(design_variables: NDArray[np.float64]) -> NDArray[np.float64]:
         x = tdf(design_variables)
         h_x = (
